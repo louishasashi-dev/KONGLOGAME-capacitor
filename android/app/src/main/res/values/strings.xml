@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">KONGLOGAME</string>
+    <string name="title_activity_main">KONGLOGAME</string>
+    <string name="package_name">com.louishasashi.konglogame</string>
+    <string name="custom_url_scheme">com.louishasashi.konglogame</string>
+</resources>

@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="KONGLOGAME - game manajemen kekayaan: mining, saham, aset fisik, bisnis, dan industri."
+    />
+    <title>KONGLOGAME | Wealth Management Game</title>
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+    <link rel="stylesheet" href="Miningstyle.css" />
+  </head>
+  <body>
+    <svg class="icon-sprite" aria-hidden="true" focusable="false">
+      <symbol id="i-logo" viewBox="0 0 24 24">
+        <path
+          d="M5 3.5h3.4v7.1l6.1-7.1h4.2l-6.3 7.3 6.7 9.7h-4.3l-4.7-6.9-1.7 1.9v5H5V3.5Z"
+          fill="currentColor"
+        />
+      </symbol>
+      <symbol id="i-wallet" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="6" width="18" height="13" rx="2.5" />
+          <path d="M3 9h18M16 13.5h2.5" />
+          <path d="M6 6V4.8A1.8 1.8 0 0 1 7.8 3h8.4A1.8 1.8 0 0 1 18 4.8V6" />
+        </g>
+      </symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19V5M4 19h16" />
+          <path d="m7 15 3.5-4 3 2.4L19 7" />
+          <path d="M16 7h3v3" />
+        </g>
+      </symbol>
+      <symbol id="i-car" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m5 11 1.6-4.2A2 2 0 0 1 8.5 5.5h7a2 2 0 0 1 1.9 1.3L19 11" />
+          <path d="M4 11h16a2 2 0 0 1 2 2v3.5h-2M2 16.5V13a2 2 0 0 1 2-2" />
+          <path d="M2 16.5h3M9 16.5h6M20 16.5h2" />
+          <circle cx="6" cy="17" r="2" />
+          <circle cx="18" cy="17" r="2" />
+          <path d="M7 11h10" />
+        </g>
+      </symbol>
+      <symbol id="i-motorcycle" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="5.5" cy="17" r="3" />
+          <circle cx="18.5" cy="17" r="3" />
+          <path d="M8.5 17h5l2-6h-3l-1.5-3H8" />
+          <path d="M13.5 11h4l1 3M5.5 17l3-6h3" />
+          <path d="M16 8h2.5" />
+        </g>
+      </symbol>
+      <symbol id="i-home" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m3.5 10.5 8.5-7 8.5 7" />
+          <path d="M5.5 9.5v10h13v-10M9.5 19.5v-5h5v5" />
+        </g>
+      </symbol>
+      <symbol id="i-factory" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 20V9l5 3V9l5 3V9l5 3v8H3Z" />
+          <path d="M6 20v-3h2v3M11 20v-3h2v3M16 20v-3h2v3" />
+          <path d="M18 12V5h3v15" />
+        </g>
+      </symbol>
+      <symbol id="i-store" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 9.5V20h16V9.5" />
+          <path d="M3 9.5 5 4h14l2 5.5" />
+          <path d="M3 9.5a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
+          <path d="M9 20v-5h6v5" />
+        </g>
+      </symbol>
+      <symbol id="i-bank" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m3 9 9-5 9 5" />
+          <path d="M4 9h16M5.5 9v8M10 9v8M14 9v8M18.5 9v8M3.5 20h17" />
+        </g>
+      </symbol>
+      <symbol id="i-exchange" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 8h13M14 5l3 3-3 3" />
+          <path d="M20 16H7M10 13l-3 3 3 3" />
+        </g>
+      </symbol>
+      <symbol id="i-level" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 20V13M12 20V8M19 20V4" />
+          <path d="M3 20h18" />
+        </g>
+      </symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </g>
+      </symbol>
+      <symbol id="i-close" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="m6 6 12 12M18 6 6 18" />
+        </g>
+      </symbol>
+      <symbol id="i-reset" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 10a7.5 7.5 0 1 1 1.3 6.2" />
+          <path d="M4.5 5.5V10H9" />
+        </g>
+      </symbol>
+      <symbol id="i-buy" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14M5 12h14" />
+        </g>
+      </symbol>
+      <symbol id="i-sell" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12h14" />
+        </g>
+      </symbol>
+      <symbol id="i-trend-up" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m4 16 5-5 3.5 3.5L20 7" />
+          <path d="M15 7h5v5" />
+        </g>
+      </symbol>
+      <symbol id="i-trend-down" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m4 8 5 5 3.5-3.5L20 17" />
+          <path d="M15 17h5v-5" />
+        </g>
+      </symbol>
+      <symbol id="i-flat" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M5 12h14" />
+        </g>
+      </symbol>
+      <symbol id="i-piggy" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 11a6 6 0 0 1 6-6h5l2 2h2v5l-2 1v3h-3v-1H9v1H6v-3.5" />
+          <path d="M7 9.5H5.5A2.5 2.5 0 0 0 3 12v1h2M9 5V3" />
+          <circle cx="8.5" cy="10" r=".6" fill="currentColor" stroke="none" />
+        </g>
+      </symbol>
+      <symbol id="i-coin" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 7.5v9M14.6 9.2c-.5-.7-1.4-1.1-2.6-1.1-1.5 0-2.5.7-2.5 1.8 0 1 .8 1.5 2.6 1.9 1.7.4 2.5.9 2.5 1.9 0 1.1-1 1.8-2.6 1.8-1.2 0-2.1-.4-2.7-1.2" />
+        </g>
+      </symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3.5 21 20H3L12 3.5Z" />
+          <path d="M12 9v4.5M12 17h.01" />
+        </g>
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m5 12 4.5 4.5L19 6.5" />
+        </g>
+      </symbol>
+      <symbol id="i-info" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M12 11v5M12 8h.01" />
+        </g>
+      </symbol>
+      <symbol id="i-arrow-right" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12h14M14 7l5 5-5 5" />
+        </g>
+      </symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.8 2.8M14.9 14.9l2.8 2.8M17.7 6.3l-2.8 2.8M9.1 14.9l-2.8 2.8" />
+        </g>
+      </symbol>
+    </svg>
+
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="#" aria-label="KONGLOGAME">
+          <span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#i-logo"></use></svg></span>
+          <span class="brand-copy">
+            <strong>KONGLOGAME</strong>
+            <small>Wealth management</small>
+          </span>
+        </a>
+
+        <nav class="primary-nav" aria-label="Navigasi utama">
+          <button class="page-nav-btn active" type="button" data-page="investment" aria-current="page">
+            <svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg>
+            <span>Investment</span>
+          </button>
+          <button class="page-nav-btn" type="button" data-page="physical">
+            <svg class="icon" aria-hidden="true"><use href="#i-car"></use></svg>
+            <span>Physical Assets</span>
+          </button>
+          <button class="page-nav-btn" type="button" data-page="business">
+            <svg class="icon" aria-hidden="true"><use href="#i-factory"></use></svg>
+            <span>Business &amp; Industry</span>
+          </button>
+        </nav>
+
+        <div class="topbar-actions">
+          <div class="topbar-wallet" aria-label="Saldo utama">
+            <svg class="icon" aria-hidden="true"><use href="#i-wallet"></use></svg>
+            <span id="topbarWallet">$0</span>
+          </div>
+          <button
+            class="icon-btn"
+            id="statsToggleBtn"
+            type="button"
+            aria-label="Buka menu dan statistik"
+            aria-expanded="false"
+            aria-controls="statsPanel"
+          >
+            <svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div id="floatingWallet" aria-hidden="true">
+      <svg class="icon" aria-hidden="true"><use href="#i-wallet"></use></svg>
+      <span id="floatingWalletValue">$0</span>
+    </div>
+
+    <main class="layout">
+      <aside class="dashboard" aria-label="Dashboard akun">
+        <section class="panel wallet-panel">
+          <div class="wallet-panel-top">
+            <span class="eyebrow">KONGLOBANK</span>
+            <span class="status-dot"><span></span>Live</span>
+          </div>
+          <div class="wallet-balance" id="mainWallet">$0</div>
+          <div class="wallet-rate">
+            <svg class="icon" aria-hidden="true"><use href="#i-trend-up"></use></svg>
+            <span id="incomeRate">$0.00 / detik</span>
+          </div>
+          <div class="wallet-meta">
+            <span>Level <strong id="currentLevel">1</strong></span>
+            <span>Mining <strong id="miningRate">$4.00/s</strong></span>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Mining</span>
+              <h2>Level &amp; upgrade</h2>
+            </div>
+            <svg class="icon panel-icon" aria-hidden="true"><use href="#i-level"></use></svg>
+          </div>
+          <div class="level-track" aria-hidden="true"><span id="levelProgress"></span></div>
+          <div class="upgrade-grid">
+            <div>
+              <span class="muted-label">Level berikutnya</span>
+              <strong id="nextLevel">2</strong>
+            </div>
+            <div>
+              <span class="muted-label">Pendapatan</span>
+              <strong id="nextIncome">$6.00/s</strong>
+            </div>
+            <div>
+              <span class="muted-label">Biaya</span>
+              <strong id="upgradeCost">$120</strong>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-block" id="upgradeBtn" type="button">
+            Upgrade level
+          </button>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Currency exchange</span>
+              <h2>Konversi mata uang</h2>
+            </div>
+            <svg class="icon panel-icon" aria-hidden="true"><use href="#i-exchange"></use></svg>
+          </div>
+          <p class="rate-info" id="rateInfo">1 USD = 16,471 IDR</p>
+          <label class="field">
+            <span>USD</span>
+            <input id="usdAmount" type="number" inputmode="decimal" min="0" step="any" placeholder="0" />
+          </label>
+          <div class="button-row">
+            <button class="btn btn-secondary" type="button" data-action="convert-usd">Ke IDR</button>
+            <button class="btn btn-secondary" type="button" data-action="convert-usd-all">Semua</button>
+          </div>
+          <label class="field">
+            <span>IDR</span>
+            <input id="idrAmount" type="number" inputmode="decimal" min="0" step="any" placeholder="0" />
+          </label>
+          <div class="button-row">
+            <button class="btn btn-secondary" type="button" data-action="convert-idr">Ke USD</button>
+            <button class="btn btn-secondary" type="button" data-action="convert-idr-all">Semua</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Savings</span>
+              <h2>Tabungan</h2>
+            </div>
+            <svg class="icon panel-icon" aria-hidden="true"><use href="#i-piggy"></use></svg>
+          </div>
+          <div class="savings-balance" id="savingsAccount">Rp 0</div>
+          <p class="helper" id="savingsInterestInfo">Bunga 0.02% setiap 5 menit.</p>
+          <label class="field">
+            <span>Tarik ke rupiah</span>
+            <input
+              id="savingsTransferAmount"
+              type="number"
+              inputmode="decimal"
+              min="0"
+              step="any"
+              placeholder="Jumlah"
+            />
+          </label>
+          <button class="btn btn-secondary btn-block" type="button" data-action="transfer-savings">
+            Transfer tabungan
+          </button>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Income wallets</span>
+              <h2>Dompet pendapatan</h2>
+            </div>
+            <svg class="icon panel-icon" aria-hidden="true"><use href="#i-coin"></use></svg>
+          </div>
+          <div class="wallet-list">
+            <div><span>Rupiah</span><strong id="rupiahWallet">Rp 0</strong></div>
+            <div><span>Dividen saham</span><strong id="stockDividends">$0.00</strong></div>
+            <div><span>Bisnis &amp; industri</span><strong id="businessIncome">$0.00</strong></div>
+          </div>
+          <p class="helper" id="sweepInfo">Pendapatan dompet disapu ke saldo utama setiap 30 detik.</p>
+        </section>
+      </aside>
+
+      <div class="workspace">
+        <section class="page active" id="page-investment" data-page-panel="investment">
+          <header class="page-heading">
+            <div>
+              <span class="page-kicker">Portfolio</span>
+              <h1>Investment</h1>
+              <p>Harga saham bergerak setiap beberapa detik. Dividen dibayarkan terpisah dari capital gain.</p>
+            </div>
+            <div class="market-clock">
+              <span class="muted-label">Harga berikutnya</span>
+              <strong id="stockUpdateCountdown">15s</strong>
+            </div>
+          </header>
+
+          <div class="portfolio-grid">
+            <div class="metric">
+              <span class="muted-label">Nilai portofolio</span>
+              <strong id="portfolioValue">$0.00</strong>
+            </div>
+            <div class="metric">
+              <span class="muted-label">Modal saham</span>
+              <strong id="portfolioCost">$0.00</strong>
+            </div>
+            <div class="metric">
+              <span class="muted-label">Unrealized P/L</span>
+              <strong id="portfolioPnl">$0.00</strong>
+            </div>
+            <div class="metric">
+              <span class="muted-label">Dividen per periode</span>
+              <strong id="portfolioDividend">$0.00</strong>
+            </div>
+            <div class="metric">
+              <span class="muted-label">Dividen berikutnya</span>
+              <strong id="nextDividendCountdown">2m</strong>
+            </div>
+          </div>
+
+          <div class="market-note">
+            <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+            <div>
+              <strong>Simulasi pasar</strong>
+              <p id="marketCadence">Harga diperbarui setiap 15 detik dengan volatilitas berbeda per saham.</p>
+            </div>
+          </div>
+
+          <div class="stock-list" id="stocksGrid" aria-live="polite"></div>
+        </section>
+
+        <section class="page" id="page-physical" data-page-panel="physical" hidden>
+          <header class="page-heading">
+            <div>
+              <span class="page-kicker">Physical Assets</span>
+              <h1>Physical Assets</h1>
+              <p>Kendaraan dan properti memberi pasif kecil. Payback lebih panjang daripada bisnis, tetapi nilainya besar.</p>
+            </div>
+          </header>
+
+          <div class="subnav" role="tablist" aria-label="Kategori aset fisik">
+            <button class="subnav-btn active" type="button" data-tab-target="vehicles" role="tab" aria-selected="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-car"></use></svg>
+              <span>Luxury Vehicles</span>
+              <span class="count" id="vehiclesCount">0</span>
+            </button>
+            <button class="subnav-btn" type="button" data-tab-target="motorcycle" role="tab" aria-selected="false">
+              <svg class="icon" aria-hidden="true"><use href="#i-motorcycle"></use></svg>
+              <span>Motorcycle Collection</span>
+              <span class="count" id="motorcycleCount">0</span>
+            </button>
+            <button class="subnav-btn" type="button" data-tab-target="realestate" role="tab" aria-selected="false">
+              <svg class="icon" aria-hidden="true"><use href="#i-home"></use></svg>
+              <span>Real Estate Portfolio</span>
+              <span class="count" id="realestateCount">0</span>
+            </button>
+          </div>
+
+          <div class="tab-content active" id="tab-vehicles" data-tab-panel="vehicles" role="tabpanel">
+            <div class="category-intro">
+              <div><span class="eyebrow">Collection</span><h2>Luxury Vehicles</h2></div>
+              <p>Pasif rendah, cocok untuk menyerap saldo besar setelah bisnis berjalan.</p>
+            </div>
+            <div class="asset-grid" id="vehiclesGrid"></div>
+          </div>
+          <div class="tab-content" id="tab-motorcycle" data-tab-panel="motorcycle" role="tabpanel" hidden>
+            <div class="category-intro">
+              <div><span class="eyebrow">Collection</span><h2>Motorcycle Collection</h2></div>
+              <p>Modal awal lebih kecil, tetapi tetap bukan mesin pendapatan utama.</p>
+            </div>
+            <div class="asset-grid" id="motorcycleGrid"></div>
+          </div>
+          <div class="tab-content" id="tab-realestate" data-tab-panel="realestate" role="tabpanel" hidden>
+            <div class="category-intro">
+              <div><span class="eyebrow">Portfolio</span><h2>Real Estate Portfolio</h2></div>
+              <p>Komitmen modal jangka panjang. Payback paling lama di kategori aset fisik.</p>
+            </div>
+            <div class="asset-grid" id="realestateGrid"></div>
+          </div>
+        </section>
+
+        <section class="page" id="page-business" data-page-panel="business" hidden>
+          <header class="page-heading">
+            <div>
+              <span class="page-kicker">Business &amp; Industry</span>
+              <h1>Business &amp; Industry</h1>
+              <p>Bisnis kecil memberi arus kas tercepat. Industri membutuhkan modal besar dengan payback menengah.</p>
+            </div>
+          </header>
+
+          <div class="subnav" role="tablist" aria-label="Kategori bisnis dan industri">
+            <button class="subnav-btn active" type="button" data-tab-target="business" role="tab" aria-selected="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-store"></use></svg>
+              <span>Small Business Ventures</span>
+              <span class="count" id="businessCount">0</span>
+            </button>
+            <button class="subnav-btn" type="button" data-tab-target="industry" role="tab" aria-selected="false">
+              <svg class="icon" aria-hidden="true"><use href="#i-factory"></use></svg>
+              <span>Industrial Empire</span>
+              <span class="count" id="industryCount">0</span>
+            </button>
+          </div>
+
+          <div class="tab-content active" id="tab-business" data-tab-panel="business" role="tabpanel">
+            <div class="category-intro">
+              <div><span class="eyebrow">Cash flow</span><h2>Small Business Ventures</h2></div>
+              <p>Payback 3-8 menit. Fondasi arus kas awal sebelum masuk ke industri.</p>
+            </div>
+            <div class="asset-grid" id="businessGrid"></div>
+          </div>
+          <div class="tab-content" id="tab-industry" data-tab-panel="industry" role="tabpanel" hidden>
+            <div class="category-intro">
+              <div><span class="eyebrow">Scale</span><h2>Industrial Empire</h2></div>
+              <p>Payback 8-15 menit. Aset mahal dengan pendapatan absolut besar.</p>
+            </div>
+            <div class="asset-grid" id="industryGrid"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+    <aside class="stats-drawer" id="statsPanel" aria-label="Menu dan statistik" aria-hidden="true" inert>
+      <div class="drawer-header">
+        <div>
+          <span class="eyebrow">KONGLOGAME</span>
+          <h2>Menu &amp; statistik</h2>
+        </div>
+        <button class="icon-btn" id="closeStatsBtn" type="button" aria-label="Tutup menu">
+          <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
+      </div>
+      <div class="drawer-body">
+        <section class="panel compact">
+          <h3>Statistik kumulatif</h3>
+          <div class="stat-list">
+            <div><span>Bunga tabungan</span><strong id="statsSavings">Rp 0</strong></div>
+            <div><span>Dividen saham</span><strong id="statsStock">$0.00</strong></div>
+            <div><span>Pendapatan bisnis</span><strong id="statsBusiness">$0.00</strong></div>
+            <div><span>Capital gain terealisasi</span><strong id="statsCapitalGains">$0.00</strong></div>
+          </div>
+        </section>
+
+        <section class="panel compact">
+          <h3>Dompet lain</h3>
+          <div class="stat-list">
+            <div><span>Tabungan</span><strong id="statsSavingsBalance">Rp 0</strong></div>
+            <div><span>Rupiah</span><strong id="statsRupiah">Rp 0</strong></div>
+            <div><span>Dividen saham tertunda</span><strong id="statsStockWallet">$0.00</strong></div>
+            <div><span>Pendapatan bisnis tertunda</span><strong id="statsBusinessWallet">$0.00</strong></div>
+          </div>
+        </section>
+
+        <section class="panel compact">
+          <h3>Informasi ekonomi</h3>
+          <div class="stat-list">
+            <div><span>Mining rate</span><strong id="statsMiningRate">$4.00/s</strong></div>
+            <div><span>Pendapatan kontinu</span><strong id="statsIncomeRate">$0.00/s</strong></div>
+            <div><span>Nilai saham</span><strong id="statsPortfolioValue">$0.00</strong></div>
+          </div>
+        </section>
+
+        <button class="btn btn-danger btn-block" id="resetModalBtn" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-reset"></use></svg>
+          Reset progres
+        </button>
+        <p class="helper">Save tersimpan lokal di browser dengan key <code>investmentEmpireSave</code>.</p>
+      </div>
+    </aside>
+
+    <div class="modal" id="resetModal" role="dialog" aria-modal="true" aria-labelledby="resetTitle" hidden>
+      <div class="modal-content">
+        <h3 id="resetTitle">Reset semua progres?</h3>
+        <p>Saldo, aset, saham, level, statistik, dan dompet akan dihapus. Tindakan ini tidak bisa dibatalkan.</p>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" id="cancelResetBtn" type="button">Batal</button>
+          <button class="btn btn-danger" id="confirmResetBtn" type="button">Ya, reset</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer" aria-live="polite" aria-atomic="false"></div>
+
+    <script type="module" src="Mininglogic.js"></script>
+  </body>
+</html>
