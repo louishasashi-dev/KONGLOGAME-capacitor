@@ -9,6 +9,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.util.Log;
 import androidx.annotation.RequiresApi;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -30,11 +31,14 @@ import java.nio.charset.StandardCharsets;
 )
 public class SaveBackupPlugin extends Plugin {
 
+    private static final String TAG = "KONGLOGAME.SaveBackup";
     private static final String MIME_TYPE = "application/json";
 
     @PluginMethod
     public void saveToDownloads(PluginCall call) {
+        Log.d(TAG, "saveToDownloads requested, SDK=" + Build.VERSION.SDK_INT);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && !hasRequiredPermissions()) {
+            Log.d(TAG, "Requesting WRITE_EXTERNAL_STORAGE permission");
             requestPermissionForAlias("storage", call, "saveToDownloadsAfterPermission");
             return;
         }
@@ -44,6 +48,7 @@ public class SaveBackupPlugin extends Plugin {
     @PermissionCallback
     private void saveToDownloadsAfterPermission(PluginCall call) {
         if (!hasRequiredPermissions()) {
+            Log.e(TAG, "Storage permission denied");
             call.reject("Izin penyimpanan ditolak.");
             return;
         }
@@ -60,6 +65,7 @@ public class SaveBackupPlugin extends Plugin {
 
         try {
             String relativePath = Environment.DIRECTORY_DOWNLOADS + "/KONGLOGAME-save/";
+            Log.d(TAG, "Writing " + fileName + " to " + relativePath + " (" + data.length() + " chars)");
             Uri uri =
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
                     ? writeWithMediaStore(fileName, relativePath, data)
@@ -68,8 +74,10 @@ public class SaveBackupPlugin extends Plugin {
             JSObject result = new JSObject();
             result.put("uri", uri.toString());
             result.put("path", "Download/KONGLOGAME-save/" + fileName);
+            Log.d(TAG, "Backup written successfully: " + uri);
             call.resolve(result);
         } catch (Exception error) {
+            Log.e(TAG, "Backup write failed", error);
             call.reject("Gagal menyimpan backup: " + error.getMessage(), error);
         }
     }
@@ -79,15 +87,18 @@ public class SaveBackupPlugin extends Plugin {
         ContentResolver resolver = getContext().getContentResolver();
         Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
         Uri existing = findExistingDownload(resolver, collection, fileName, relativePath);
+        byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
 
         if (existing != null) {
+            Log.d(TAG, "Overwriting existing download: " + existing);
             try (OutputStream out = resolver.openOutputStream(existing, "wt")) {
                 if (out == null) throw new Exception("Tidak bisa membuka file tujuan.");
-                out.write(data.getBytes(StandardCharsets.UTF_8));
+                out.write(bytes);
+                out.flush();
             }
-            ContentValues done = new ContentValues();
-            done.put(MediaStore.Downloads.IS_PENDING, 0);
-            resolver.update(existing, done, null, null);
+            if (clearPending(resolver, existing) <= 0) {
+                throw new Exception("File backup tersimpan tetapi tidak bisa ditampilkan di Download.");
+            }
             return existing;
         }
 
@@ -99,20 +110,32 @@ public class SaveBackupPlugin extends Plugin {
 
         Uri uri = resolver.insert(collection, values);
         if (uri == null) throw new Exception("Tidak bisa membuat file di Download.");
+        Log.d(TAG, "Inserted pending download: " + uri);
 
         try {
             try (OutputStream out = resolver.openOutputStream(uri)) {
                 if (out == null) throw new Exception("Tidak bisa menulis file tujuan.");
-                out.write(data.getBytes(StandardCharsets.UTF_8));
+                out.write(bytes);
+                out.flush();
             }
-            ContentValues done = new ContentValues();
-            done.put(MediaStore.Downloads.IS_PENDING, 0);
-            resolver.update(uri, done, null, null);
+            if (clearPending(resolver, uri) <= 0) {
+                throw new Exception("File backup tersimpan tetapi tidak bisa ditampilkan di Download.");
+            }
             return uri;
         } catch (Exception error) {
+            Log.e(TAG, "Removing failed pending download " + uri, error);
             resolver.delete(uri, null, null);
             throw error;
         }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private int clearPending(ContentResolver resolver, Uri uri) {
+        ContentValues done = new ContentValues();
+        done.put(MediaStore.Downloads.IS_PENDING, 0);
+        int updated = resolver.update(uri, done, null, null);
+        Log.d(TAG, "Cleared IS_PENDING for " + uri + ", rows=" + updated);
+        return updated;
     }
 
     @RequiresApi(Build.VERSION_CODES.Q)
@@ -122,9 +145,12 @@ public class SaveBackupPlugin extends Plugin {
         String[] selectionArgs = { fileName, relativePath };
         try (Cursor cursor = resolver.query(collection, projection, selection, selectionArgs, null)) {
             if (cursor != null && cursor.moveToFirst()) {
-                return ContentUris.withAppendedId(collection, cursor.getLong(0));
+                Uri existing = ContentUris.withAppendedId(collection, cursor.getLong(0));
+                Log.d(TAG, "Found existing download: " + existing);
+                return existing;
             }
         }
+        Log.d(TAG, "No existing download for " + fileName);
         return null;
     }
 
@@ -134,9 +160,12 @@ public class SaveBackupPlugin extends Plugin {
             throw new Exception("Tidak bisa membuat folder Download/KONGLOGAME-save.");
         }
         File file = new File(dir, fileName);
+        Log.d(TAG, "Writing legacy file to " + file.getAbsolutePath());
         try (FileOutputStream out = new FileOutputStream(file)) {
             out.write(data.getBytes(StandardCharsets.UTF_8));
+            out.flush();
         }
+        Log.d(TAG, "Legacy file written, size=" + file.length());
         return Uri.fromFile(file);
     }
 }

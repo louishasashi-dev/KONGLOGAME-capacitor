@@ -1388,7 +1388,7 @@ async function main() {
         "window.KONGLOGAME.__test.setState({ money: 4321, assets: { business: { 0: 3 }, stocks: { 2: 5 } }, stockCostBasis: { 2: 600 }, stats: { totalBusinessIncome: 99 } });",
       );
       await evalVoid(
-        "window.__backupCapture = null; window.Capacitor = { isNativePlatform: () => true, registerPlugin: () => ({ saveToDownloads: async ({ fileName, data }) => { window.__backupCapture = { fileName, data }; return { path: 'Download/KONGLOGAME-save/' + fileName }; } }) }; document.getElementById('backupBtn').click();",
+        "window.__backupCapture = null; window.Capacitor = { isNativePlatform: () => true, Plugins: { SaveBackup: { saveToDownloads: async ({ fileName, data }) => { window.__backupCapture = { fileName, data }; return { path: 'Download/KONGLOGAME-save/' + fileName }; } } } }; document.getElementById('backupBtn').click();",
       );
       await sleep(150);
       const captured = await evaluate("window.__backupCapture");
@@ -1415,6 +1415,22 @@ async function main() {
 
       const toast = await readLastToast();
       assert(toast && toast.text.includes("Backup tersimpan"), "backup toast");
+    });
+
+    await test("Backup native tanpa plugin tidak menampilkan sukses palsu", async () => {
+      await resetState();
+      await evalVoid(
+        "window.__backupCapture = null; window.Capacitor = { isNativePlatform: () => true, Plugins: {} }; document.getElementById('backupBtn').click();",
+      );
+      await sleep(150);
+      const captured = await evaluate("window.__backupCapture");
+      await evalVoid("delete window.Capacitor; delete window.__backupCapture;");
+      assertEqual(captured, null, "no web download fallback on native");
+      const toast = await readLastToast();
+      assert(
+        toast && toast.text.includes("plugin penyimpanan tidak tersedia"),
+        "native missing plugin error toast",
+      );
     });
 
     await test("Restore memulihkan backup valid tanpa duplikasi", async () => {

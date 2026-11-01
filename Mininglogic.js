@@ -2557,12 +2557,19 @@ function getNativeSaveBackupPlugin() {
   if (
     !capacitor ||
     typeof capacitor.isNativePlatform !== "function" ||
-    !capacitor.isNativePlatform() ||
-    typeof capacitor.registerPlugin !== "function"
+    !capacitor.isNativePlatform()
   ) {
     return null;
   }
-  return capacitor.registerPlugin("SaveBackup");
+  // The Android native bridge exposes registered plugins on Capacitor.Plugins.
+  // Capacitor.registerPlugin only exists when @capacitor/core is bundled.
+  if (capacitor.Plugins && capacitor.Plugins.SaveBackup) {
+    return capacitor.Plugins.SaveBackup;
+  }
+  if (typeof capacitor.registerPlugin === "function") {
+    return capacitor.registerPlugin("SaveBackup");
+  }
+  return null;
 }
 
 function downloadBackupFile(json) {
@@ -2593,6 +2600,16 @@ async function backupGame() {
           ? result.path
           : BACKUP_FOLDER + "/" + BACKUP_FILE_NAME;
       showToast("Backup tersimpan di " + location, "success");
+      return;
+    }
+
+    const capacitor = typeof window !== "undefined" ? window.Capacitor : null;
+    if (
+      capacitor &&
+      typeof capacitor.isNativePlatform === "function" &&
+      capacitor.isNativePlatform()
+    ) {
+      showToast("Backup gagal: plugin penyimpanan tidak tersedia.", "error");
       return;
     }
 
