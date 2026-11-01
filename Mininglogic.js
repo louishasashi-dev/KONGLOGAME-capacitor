@@ -5,6 +5,9 @@
 // changing the catalog, or add a migration before reordering entries.
 
 const SAVE_KEY = "investmentEmpireSave";
+const BACKUP_FILE_NAME = "filesave.json";
+const BACKUP_FOLDER = "Download/KONGLOGAME-save";
+const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
 const SCHEMA_VERSION = 3;
 const MAX_SAFE_MONEY = 1e15;
 const MAX_QUANTITY = 1e9;
@@ -2433,6 +2436,208 @@ function saveGame() {
   }
 }
 
+function createBackupJson() {
+  const snapshot = JSON.parse(JSON.stringify(gameState));
+  snapshot.version = SCHEMA_VERSION;
+  return JSON.stringify(snapshot, null, 2);
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNumericValue(value) {
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") {
+    return value.trim() !== "" && Number.isFinite(Number(value));
+  }
+  return false;
+}
+
+function validateBackupSave(save) {
+  if (!isPlainObject(save)) {
+    return "Isi file bukan data save KONGLOGAME.";
+  }
+
+  if (save.version !== undefined && save.version !== null) {
+    if (!isNumericValue(save.version)) return "Versi save tidak valid.";
+    const version = Number(save.version);
+    if (!Number.isInteger(version) || version < 1) {
+      return "Versi save tidak valid.";
+    }
+    if (version > SCHEMA_VERSION) {
+      return (
+        "Versi save tidak didukung (file v" +
+        version +
+        ", aplikasi v" +
+        SCHEMA_VERSION +
+        ")."
+      );
+    }
+  }
+
+  if (!isNumericValue(save.money) || !isPlainObject(save.assets)) {
+    return "File backup tidak berisi data progres KONGLOGAME.";
+  }
+
+  const objectFields = ["stockMarket", "timers", "stats", "stockCostBasis"];
+  for (const field of objectFields) {
+    if (
+      save[field] !== undefined &&
+      save[field] !== null &&
+      !isPlainObject(save[field])
+    ) {
+      return "Struktur data backup tidak valid (" + field + ").";
+    }
+  }
+
+  for (const category of Object.keys(CATEGORY_META)) {
+    const holdings = save.assets[category];
+    if (
+      holdings !== undefined &&
+      holdings !== null &&
+      !isPlainObject(holdings)
+    ) {
+      return "Struktur aset backup tidak valid (" + category + ").";
+    }
+  }
+
+  if (
+    save.level !== undefined &&
+    save.level !== null &&
+    !isNumericValue(save.level)
+  ) {
+    return "Struktur level backup tidak valid.";
+  }
+
+  const hasCoreData =
+    isNumericValue(save.level) ||
+    isPlainObject(save.stockMarket) ||
+    isPlainObject(save.timers) ||
+    isPlainObject(save.stats);
+  if (!hasCoreData) {
+    return "File backup tidak lengkap.";
+  }
+
+  return null;
+}
+
+function applyBackupSave(save) {
+  const nextState = migrateSave(save);
+  gameState = nextState;
+  saveGame();
+  renderAllAssetCards();
+  updateStockUI();
+  updateDashboardUI();
+  updateCategoryCounts();
+}
+
+function restoreBackupText(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    return "File bukan JSON yang valid.";
+  }
+
+  const validationError = validateBackupSave(parsed);
+  if (validationError) return validationError;
+
+  try {
+    applyBackupSave(parsed);
+  } catch (error) {
+    return "Backup gagal diterapkan.";
+  }
+
+  return null;
+}
+
+function getNativeSaveBackupPlugin() {
+  const capacitor = typeof window !== "undefined" ? window.Capacitor : null;
+  if (
+    !capacitor ||
+    typeof capacitor.isNativePlatform !== "function" ||
+    !capacitor.isNativePlatform() ||
+    typeof capacitor.registerPlugin !== "function"
+  ) {
+    return null;
+  }
+  return capacitor.registerPlugin("SaveBackup");
+}
+
+function downloadBackupFile(json) {
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = BACKUP_FILE_NAME;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function backupGame() {
+  saveGame();
+  const json = createBackupJson();
+
+  try {
+    const plugin = getNativeSaveBackupPlugin();
+    if (plugin) {
+      const result = await plugin.saveToDownloads({
+        fileName: BACKUP_FILE_NAME,
+        data: json,
+      });
+      const location =
+        result && result.path
+          ? result.path
+          : BACKUP_FOLDER + "/" + BACKUP_FILE_NAME;
+      showToast("Backup tersimpan di " + location, "success");
+      return;
+    }
+
+    downloadBackupFile(json);
+    showToast("Backup diunduh sebagai " + BACKUP_FILE_NAME, "success");
+  } catch (error) {
+    showToast(
+      "Backup gagal: " +
+        (error && error.message ? error.message : "penyimpanan tidak tersedia"),
+      "error",
+    );
+  }
+}
+
+async function handleRestoreFile(input) {
+  const file = input.files && input.files[0];
+  input.value = "";
+  if (!file) return;
+
+  if (file.size === 0) {
+    showToast("File backup kosong.", "error");
+    return;
+  }
+  if (file.size > MAX_BACKUP_BYTES) {
+    showToast("File backup terlalu besar.", "error");
+    return;
+  }
+
+  let text;
+  try {
+    text = await file.text();
+  } catch (error) {
+    showToast("File backup tidak bisa dibaca.", "error");
+    return;
+  }
+
+  const restoreError = restoreBackupText(text);
+  if (restoreError) {
+    showToast(restoreError, "error");
+    return;
+  }
+
+  showToast("Progres berhasil dipulihkan dari backup.", "success");
+}
+
 function resetGame() {
   isResetting = true;
   if (typeof localStorage !== "undefined") {
@@ -2729,6 +2934,16 @@ function setupEventListeners() {
     });
   }
 
+  const backupBtn = getElement("backupBtn");
+  if (backupBtn) backupBtn.addEventListener("click", backupGame);
+
+  const restoreBtn = getElement("restoreBtn");
+  const restoreInput = getElement("restoreFileInput");
+  if (restoreBtn && restoreInput) {
+    restoreBtn.addEventListener("click", () => restoreInput.click());
+    restoreInput.addEventListener("change", () => handleRestoreFile(restoreInput));
+  }
+
   document.addEventListener("keydown", (event) => {
     const modal = getElement("resetModal");
     if (event.key === "Escape") {
@@ -2854,6 +3069,10 @@ function createTestApi() {
     creditInterest: creditSavingsInterest,
     sweep: sweepIncomeWallets,
     migrateSave,
+    createBackupJson,
+    validateBackupSave,
+    restoreBackupText,
+    backupGame,
     stopLoop() {
       if (loopTimer !== null) {
         window.clearInterval(loopTimer);

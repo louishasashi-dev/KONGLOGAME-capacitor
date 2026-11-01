@@ -1382,6 +1382,213 @@ async function main() {
       assertEqual(info.missingSrc, 0, "images with missing src");
     });
 
+    await test("Backup menghasilkan JSON valid dan lengkap", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 4321, assets: { business: { 0: 3 }, stocks: { 2: 5 } }, stockCostBasis: { 2: 600 }, stats: { totalBusinessIncome: 99 } });",
+      );
+      await evalVoid(
+        "window.__backupCapture = null; window.Capacitor = { isNativePlatform: () => true, registerPlugin: () => ({ saveToDownloads: async ({ fileName, data }) => { window.__backupCapture = { fileName, data }; return { path: 'Download/KONGLOGAME-save/' + fileName }; } }) }; document.getElementById('backupBtn').click();",
+      );
+      await sleep(150);
+      const captured = await evaluate("window.__backupCapture");
+      await evalVoid("delete window.Capacitor; delete window.__backupCapture;");
+      assert(captured, "backup captured");
+      assertEqual(captured.fileName, "filesave.json", "backup file name");
+      const parsed = JSON.parse(captured.data);
+      assertEqual(parsed.version, 3, "backup version");
+      assertEqual(parsed.money, 4321, "backup money");
+      assertEqual(parsed.assets.business["0"], 3, "backup business level");
+      assertEqual(parsed.assets.stocks["2"], 5, "backup shares");
+      assertEqual(parsed.stockCostBasis["2"], 600, "backup cost basis");
+      assertEqual(parsed.stats.totalBusinessIncome, 99, "backup stats");
+
+      parsed.money = 1;
+      parsed.assets.business["0"] = 99;
+      const live = await getState();
+      assertEqual(live.money, 4321, "backup object mutation does not touch live money");
+      assertEqual(
+        live.assets.business["0"],
+        3,
+        "backup object mutation does not touch live assets",
+      );
+
+      const toast = await readLastToast();
+      assert(toast && toast.text.includes("Backup tersimpan"), "backup toast");
+    });
+
+    await test("Restore memulihkan backup valid tanpa duplikasi", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 7777, assets: { business: { 0: 4 }, vehicles: { 1: 2 } }, stats: { totalSavingsInterest: 12 } });",
+      );
+      const backup = await evaluate("window.KONGLOGAME.__test.createBackupJson()");
+      await evalVoid("window.KONGLOGAME.__test.setState({ money: 1, assets: {} });");
+
+      const first = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" + JSON.stringify(backup) + ")",
+      );
+      assertEqual(first, null, "first restore result");
+      const once = await getState();
+      assertEqual(once.money, 7777, "money restored");
+      assertEqual(once.assets.business["0"], 4, "business restored");
+      assertEqual(once.assets.vehicles["1"], 2, "vehicles restored");
+      assertEqual(once.stats.totalSavingsInterest, 12, "stats restored");
+
+      const second = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" + JSON.stringify(backup) + ")",
+      );
+      assertEqual(second, null, "second restore result");
+      const twice = await getState();
+      assertEqual(
+        JSON.stringify(twice.assets),
+        JSON.stringify(once.assets),
+        "restore does not duplicate assets",
+      );
+      const saved = await getSaved();
+      assert(saved, "restored save persisted");
+      assertEqual(saved.money, 7777, "saved money after restore");
+    });
+
+    await test("Restore menolak JSON tidak valid tanpa mengubah progres", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setMoney(123); window.KONGLOGAME.saveGame();",
+      );
+      const invalid = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText('{bukan json')",
+      );
+      assert(typeof invalid === "string" && invalid.length > 0, "invalid json error");
+      const empty = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText('   ')",
+      );
+      assert(typeof empty === "string" && empty.length > 0, "empty file error");
+      const state = await getState();
+      assertEqual(state.money, 123, "progress unchanged after invalid json");
+      const saved = await getSaved();
+      assertEqual(saved.money, 123, "saved progress unchanged after invalid json");
+    });
+
+    await test("Restore menolak versi dan struktur save tidak kompatibel", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setMoney(456); window.KONGLOGAME.saveGame();",
+      );
+      const future = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify({ version: 999, money: 1, assets: {} })) +
+          ")",
+      );
+      assert(future && future.includes("Versi"), "future version rejected");
+      const badVersion = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify({ version: "abc", money: 1 })) +
+          ")",
+      );
+      assert(badVersion && badVersion.includes("Versi"), "bad version rejected");
+      const emptyObject = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText('{}')",
+      );
+      assert(emptyObject && emptyObject.length > 0, "empty object rejected");
+      const arraySave = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText('[1,2,3]')",
+      );
+      assert(arraySave && arraySave.length > 0, "array rejected");
+      const missingMoney = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify({ assets: {} })) +
+          ")",
+      );
+      assert(missingMoney && missingMoney.length > 0, "missing money rejected");
+      const incomplete = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify({ money: 0, assets: {} })) +
+          ")",
+      );
+      assert(incomplete && incomplete.includes("tidak lengkap"), "incomplete save rejected");
+      const badAssets = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(
+            JSON.stringify({ money: 1, assets: { stocks: [5] }, stats: {} }),
+          ) +
+          ")",
+      );
+      assert(badAssets && badAssets.includes("aset"), "array holdings rejected");
+      const badStats = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(
+            JSON.stringify({ money: 1, assets: {}, stats: [] }),
+          ) +
+          ")",
+      );
+      assert(badStats && badStats.includes("stats"), "array stats rejected");
+      const state = await getState();
+      assertEqual(state.money, 456, "progress unchanged after rejected backups");
+      const saved = await getSaved();
+      assertEqual(saved.money, 456, "saved progress unchanged after rejected backups");
+    });
+
+    await test("Restore menerima save lama v2 dan memigrasikan ke v3", async () => {
+      await resetState();
+      const legacy = {
+        version: 2,
+        money: 1234,
+        assets: { business: { 0: 2 }, industry: { 0: 1 } },
+        stockMarket: { prices: [], history: [] },
+        stats: {},
+      };
+      const result = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify(legacy)) +
+          ")",
+      );
+      assertEqual(result, null, "legacy restore result");
+      const state = await getState();
+      assertEqual(state.version, 3, "legacy save migrated to v3");
+      assertEqual(state.money, 1234, "legacy money restored");
+      assertEqual(state.assets.business["0"], 2, "legacy business restored");
+      assertEqual(state.assets.industry["0"], 1, "legacy industry restored");
+    });
+
+    await test("Batal memilih file tidak mengubah progres", async () => {
+      await resetState();
+      await evalVoid("window.KONGLOGAME.__test.setMoney(55);");
+      await evalVoid(
+        "document.getElementById('restoreFileInput').dispatchEvent(new Event('change'));",
+      );
+      await sleep(50);
+      const state = await getState();
+      assertEqual(state.money, 55, "progress unchanged after cancel");
+    });
+
+    await test("Restore lewat file picker bertahan setelah reload", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 2468, assets: { industry: { 0: 2 } } });",
+      );
+      const backup = await evaluate("window.KONGLOGAME.__test.createBackupJson()");
+      await evalVoid("window.KONGLOGAME.__test.setMoney(1);");
+      await evalVoid(
+        "(() => { const input = document.getElementById('restoreFileInput'); const dt = new DataTransfer(); dt.items.add(new File([" +
+          JSON.stringify(backup) +
+          "], 'filesave.json', { type: 'application/json' })); input.files = dt.files; input.dispatchEvent(new Event('change')); })()",
+      );
+      await sleep(150);
+      const restored = await getState();
+      assertEqual(restored.money, 2468, "money restored via picker");
+      assertEqual(restored.assets.industry["0"], 2, "industry restored via picker");
+      const toast = await readLastToast();
+      assert(
+        toast && toast.text.includes("berhasil dipulihkan"),
+        "restore toast after picker",
+      );
+
+      await reloadApp();
+      const after = await getState();
+      assertEqual(after.money, 2468, "money after reload");
+      assertEqual(after.assets.industry["0"], 2, "industry after reload");
+    });
+
     await test("API test tidak terekspos di production", async () => {
       await cdp.send("Page.removeScriptToEvaluateOnNewDocument", {
         identifier: testScript.identifier,
