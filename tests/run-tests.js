@@ -1605,28 +1605,6 @@ async function main() {
       assertEqual(after.assets.industry["0"], 2, "industry after reload");
     });
 
-    await test("API test tidak terekspos di production", async () => {
-      await cdp.send("Page.removeScriptToEvaluateOnNewDocument", {
-        identifier: testScript.identifier,
-      });
-      const loaded = cdp.once("Page.loadEventFired", 20000);
-      await cdp.send("Page.reload", { ignoreCache: true });
-      await loaded.catch(() => null);
-      await waitForApp(false);
-      const exposure = await evaluate(
-        "({ test: typeof window.KONGLOGAME.__test, gameTick: typeof window.KONGLOGAME.gameTick, updateStockPrices: typeof window.KONGLOGAME.updateStockPrices, buyAssetAll: typeof window.KONGLOGAME.buyAssetAll, flag: typeof window.__KONGLOGAME_TEST__ })",
-      );
-      assertEqual(exposure.test, "undefined", "__test hidden");
-      assertEqual(exposure.gameTick, "undefined", "gameTick hidden");
-      assertEqual(
-        exposure.updateStockPrices,
-        "undefined",
-        "updateStockPrices hidden",
-      );
-      assertEqual(exposure.flag, "undefined", "test flag not inherited");
-      assertEqual(exposure.buyAssetAll, "function", "public buyAssetAll kept");
-    });
-
     await test("Tidak ada horizontal overflow pada berbagai ukuran layar", async () => {
       const sizes = [
         { width: 1440, height: 900, mobile: false },
@@ -1675,6 +1653,426 @@ async function main() {
         }
       }
       await cdp.send("Emulation.clearDeviceMetricsOverride");
+    });
+
+    await test("Offline income tepat 10 menit dihitung penuh", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { business: { 0: 1 } } });",
+      );
+      const expected = await evaluate(
+        "(() => { const api = window.KONGLOGAME; const cfg = api.getConfig(); const data = api.getAssetData(); return (cfg.mining.levels[0].rate + data.business[0].incomePerSecond) * 600; })()",
+      );
+      const result = await evaluate(
+        "(() => { const api = window.KONGLOGAME; api.__test.setOfflineLastSeen(Date.now() - 600000); return api.__test.settleOfflineIncome(); })()",
+      );
+      assertEqual(result.seconds, 600, "offline seconds at 10 minutes");
+      assertClose(result.gross, expected, 0.001, "offline gross at 10 minutes");
+      const info = await evaluate(
+        "window.KONGLOGAME.__test.getOfflineIncomeInfo()",
+      );
+      assertClose(info.pendingGross, expected, 0.001, "pending gross at 10 minutes");
+    });
+
+    await test("Offline lebih dari 10 menit tetap dibatasi 10 menit", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { business: { 0: 1 } } });",
+      );
+      const expected = await evaluate(
+        "(() => { const api = window.KONGLOGAME; const cfg = api.getConfig(); const data = api.getAssetData(); return (cfg.mining.levels[0].rate + data.business[0].incomePerSecond) * 600; })()",
+      );
+      const result = await evaluate(
+        "(() => { const api = window.KONGLOGAME; api.__test.setOfflineLastSeen(Date.now() - 3600000); return api.__test.settleOfflineIncome(); })()",
+      );
+      assertEqual(result.seconds, 600, "offline seconds capped");
+      assertClose(result.gross, expected, 0.001, "offline gross capped");
+      const info = await evaluate(
+        "window.KONGLOGAME.__test.getOfflineIncomeInfo()",
+      );
+      assertClose(info.pendingGross, expected, 0.001, "pending gross capped");
+    });
+
+    await test("Pajak offline income 35% dan hasil bersih 65%", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { business: { 0: 1 } } });",
+      );
+      const result = await evaluate(
+        "(() => { const api = window.KONGLOGAME; api.__test.setOfflineLastSeen(Date.now() - 600000); return api.__test.settleOfflineIncome(); })()",
+      );
+      assertClose(result.net, result.gross * 0.65, 0.000001, "net is 65%");
+      assertClose(result.tax, result.gross * 0.35, 0.000001, "tax is 35%");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.claimOfflineIncome()"),
+        true,
+        "claim succeeds",
+      );
+      const state = await getState();
+      assertClose(state.money, result.net, 0.000001, "claimed net credited");
+    });
+
+    await test("Semua sumber income dihitung sekali di offline income", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, savingsAccount: 100000, assets: { vehicles: { 0: 2 }, motorcycle: { 0: 3 }, realestate: { 0: 1 }, business: { 0: 2 }, industry: { 0: 1 }, stocks: { 0: 10 } } });",
+      );
+      const expected = await evaluate(
+        "(() => { const api = window.KONGLOGAME; const cfg = api.getConfig(); const data = api.getAssetData(); const seconds = 600; const mining = cfg.mining.levels[0].rate * seconds; const physical = (data.vehicles[0].incomePerSecond * 2 + data.motorcycle[0].incomePerSecond * 3 + data.realestate[0].incomePerSecond) * seconds; const business = (data.business[0].incomePerSecond * 2 + data.industry[0].incomePerSecond) * seconds; const dividends = data.stocks[0].dividendPerShare * 10 * Math.floor(600000 / cfg.stocks.dividendIntervalMs); const interest = 100000 * (Math.pow(1 + cfg.savings.interestRate, Math.floor(600000 / cfg.savings.interestIntervalMs)) - 1); return { mining, physical, business, dividends, interest, gross: mining + physical + business + dividends + interest }; })()",
+      );
+      const result = await evaluate(
+        "(() => { const api = window.KONGLOGAME; api.__test.setOfflineLastSeen(Date.now() - 600000); return api.__test.settleOfflineIncome(); })()",
+      );
+      assertClose(result.mining, expected.mining, 0.000001, "mining income");
+      assertClose(result.physical, expected.physical, 0.000001, "physical income");
+      assertClose(result.business, expected.business, 0.000001, "business income");
+      assertClose(
+        result.stockDividends,
+        expected.dividends,
+        0.000001,
+        "stock dividend income",
+      );
+      assertClose(
+        result.savingsInterest,
+        expected.interest,
+        0.000001,
+        "savings interest income",
+      );
+      assertClose(result.gross, expected.gross, 0.000001, "total gross income");
+    });
+
+    await test("Klaim sebelum 10 menit tetap menghabiskan satu token", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 60000); window.KONGLOGAME.__test.settleOfflineIncome();",
+      );
+      const before = await evaluate(
+        "window.KONGLOGAME.__test.getResearchTokenInfo()",
+      );
+      assertEqual(before.available, 3, "tokens before claim");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.claimOfflineIncome()"),
+        true,
+        "claim before 10 minutes",
+      );
+      const after = await evaluate(
+        "window.KONGLOGAME.__test.getResearchTokenInfo()",
+      );
+      assertEqual(after.available, 2, "token consumed before 10 minutes");
+      assertEqual(after.uses.length, 1, "one token use recorded");
+      const ui = await evaluate(
+        "({ tokens: document.getElementById('offlineTokens').textContent, pending: document.getElementById('offlineAvailable').textContent, disabled: document.getElementById('claimOfflineBtn').disabled })",
+      );
+      assertEqual(ui.tokens, "2 / 3", "token UI after claim");
+      assertEqual(ui.pending, "$0.00", "pending UI after claim");
+      assertEqual(ui.disabled, true, "claim disabled after claim");
+    });
+
+    await test("Maksimal 3 token riset dalam 24 jam", async () => {
+      await resetState();
+      for (let index = 0; index < 3; index += 1) {
+        await evalVoid(
+          "window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 60000); window.KONGLOGAME.__test.settleOfflineIncome();",
+        );
+        assertEqual(
+          await evaluate("window.KONGLOGAME.__test.claimOfflineIncome()"),
+          true,
+          "claim " + (index + 1),
+        );
+      }
+      const info = await evaluate(
+        "window.KONGLOGAME.__test.getResearchTokenInfo()",
+      );
+      assertEqual(info.available, 0, "no tokens left");
+      assertEqual(info.uses.length, 3, "three token uses recorded");
+      assert(info.nextTokenAt > Date.now(), "next token time in the future");
+
+      await evalVoid(
+        "window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 60000); window.KONGLOGAME.__test.settleOfflineIncome();",
+      );
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.claimOfflineIncome()"),
+        false,
+        "fourth claim rejected",
+      );
+      const after = await getState();
+      assertEqual(after.offline.tokenUses.length, 3, "token uses unchanged");
+      const toast = await readLastToast();
+      assert(
+        toast && /Token riset habis/.test(toast.text),
+        "exhausted token toast",
+      );
+    });
+
+    await test("Token kembali sesuai waktu reset 24 jam", async () => {
+      await resetState();
+      const now = Date.now();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setOffline({ tokenUses: [" +
+          (now - 1000) +
+          ", " +
+          (now - 1000) +
+          ", " +
+          (now - 1000) +
+          "] });",
+      );
+      const info = await evaluate(
+        "window.KONGLOGAME.__test.getResearchTokenInfo()",
+      );
+      assertEqual(info.available, 0, "tokens exhausted");
+      assertEqual(
+        info.nextTokenAt,
+        now - 1000 + 24 * 60 * 60 * 1000,
+        "next token at oldest use plus 24 hours",
+      );
+      const reset = await evaluate(
+        "window.KONGLOGAME.__test.getResearchTokenInfo(" +
+          (info.nextTokenAt + 1) +
+          ")",
+      );
+      assertEqual(reset.available, 3, "tokens reset after 24 hours");
+      assertEqual(reset.nextTokenAt, null, "no pending token after reset");
+
+      const ui = await evaluate(
+        "(() => { const sections = Array.from(document.querySelectorAll('#statsPanel .drawer-body section')); const index = sections.findIndex((section) => section.querySelector('h3') && section.querySelector('h3').textContent.trim() === 'Offline income'); const economy = sections.findIndex((section) => section.querySelector('h3') && section.querySelector('h3').textContent.trim() === 'Informasi ekonomi'); return { index, economy, hidden: document.getElementById('offlineTokenReturnRow').hidden, text: document.getElementById('offlineTokenReturn').textContent }; })()",
+      );
+      assertEqual(ui.economy >= 0, true, "economy section exists");
+      assertEqual(ui.index, ui.economy + 1, "offline card below economy section");
+      assertEqual(ui.hidden, false, "token return row visible when exhausted");
+      const expectedText =
+        "Token kembali pada jam " +
+        new Intl.DateTimeFormat("id-ID", {
+          timeZone: "Asia/Jakarta",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        })
+          .format(new Date(info.nextTokenAt))
+          .replace(":", ".") +
+        " WIB";
+      assertEqual(ui.text, expectedText, "token return WIB format");
+    });
+
+    await test("State token dan offline income konsisten setelah reload", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 60000); window.KONGLOGAME.__test.settleOfflineIncome(); window.KONGLOGAME.__test.claimOfflineIncome(); window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 30000); window.KONGLOGAME.__test.settleOfflineIncome(); window.KONGLOGAME.saveGame();",
+      );
+      const before = await getState();
+      assertEqual(before.offline.tokenUses.length, 1, "token use before reload");
+      assert(before.offline.pendingGross > 0, "pending income before reload");
+
+      await reloadApp();
+      const after = await getState();
+      assertEqual(after.money, before.money, "money after reload");
+      assertEqual(
+        after.offline.tokenUses.length,
+        1,
+        "token use after reload",
+      );
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.getResearchTokenInfo().available"),
+        2,
+        "tokens after reload",
+      );
+      assertClose(
+        after.offline.pendingGross,
+        before.offline.pendingGross,
+        5,
+        "pending offline income after reload",
+      );
+      const ui = await evaluate(
+        "({ tokens: document.getElementById('offlineTokens').textContent, available: document.getElementById('offlineAvailable').textContent })",
+      );
+      assertEqual(ui.tokens, "2 / 3", "token UI after reload");
+      assert(ui.available !== "$0.00", "pending UI after reload");
+    });
+
+    await test("Save lama tanpa data offline tetap dapat dimuat", async () => {
+      await seedSave({
+        version: 2,
+        money: 4321,
+        assets: { business: { 0: 2 }, industry: { 0: 1 } },
+        stockMarket: { prices: [], history: [] },
+        stats: {},
+      });
+      const state = await getState();
+      assertEqual(state.version, 3, "legacy save migrated");
+      assertEqual(state.money, 4321, "legacy money preserved");
+      assert(state.offline, "offline state created");
+      assert(Number.isFinite(state.offline.lastSeenAt), "last seen initialized");
+      assertEqual(state.offline.tokenUses.length, 0, "no legacy token uses");
+      assert(state.offline.pendingGross >= 0, "pending income defaults to zero");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.getResearchTokenInfo().available"),
+        3,
+        "three tokens for legacy save",
+      );
+    });
+
+    await test("Klaim berulang tidak menggandakan income", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 60000); window.KONGLOGAME.__test.settleOfflineIncome();",
+      );
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.claimOfflineIncome()"),
+        true,
+        "first claim",
+      );
+      const afterFirst = await getState();
+      const second = await evaluate(
+        "window.KONGLOGAME.__test.claimOfflineIncome()",
+      );
+      const afterSecond = await getState();
+      assertEqual(second, false, "second claim rejected");
+      assertEqual(afterSecond.money, afterFirst.money, "money not duplicated");
+      assertEqual(
+        afterSecond.offline.tokenUses.length,
+        1,
+        "token not consumed twice",
+      );
+      assertEqual(afterSecond.offline.pendingGross, 0, "pending stays cleared");
+    });
+
+    await test("Token kembali satu per satu sesuai timestamp tertua", async () => {
+      await resetState();
+      const result = await evaluate(
+        "(() => { const api = window.KONGLOGAME; const t = Date.now(); const windowMs = 24 * 60 * 60 * 1000; api.__test.setOffline({ tokenUses: [t - windowMs + 1000, t - windowMs + 3000, t - windowMs + 5000] }); const at0 = api.__test.getResearchTokenInfo(t); const at1 = api.__test.getResearchTokenInfo(t + 1001); const at2 = api.__test.getResearchTokenInfo(t + 3001); const at3 = api.__test.getResearchTokenInfo(t + 5001); return { at0, at1, at2, at3 }; })()",
+      );
+      assertEqual(result.at0.available, 0, "no token before oldest expires");
+      assertEqual(
+        result.at0.nextTokenAt,
+        result.at0.uses[0] + 24 * 60 * 60 * 1000,
+        "next token uses oldest timestamp",
+      );
+      assertEqual(result.at1.available, 1, "one token returns first");
+      assertEqual(result.at1.nextTokenAt, null, "no pending return while token available");
+      assertEqual(result.at2.available, 2, "second token returns");
+      assertEqual(result.at3.available, 3, "third token returns");
+    });
+
+    await test("Token tidak reset oleh reload berulang", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setOffline({ tokenUses: [Date.now() - 3000, Date.now() - 2000, Date.now() - 1000] }); window.KONGLOGAME.saveGame();",
+      );
+      await reloadApp();
+      let info = await evaluate(
+        "window.KONGLOGAME.__test.getResearchTokenInfo()",
+      );
+      assertEqual(info.available, 0, "tokens stay exhausted after reload");
+      assertEqual(info.uses.length, 3, "three uses after reload");
+      await reloadApp();
+      info = await evaluate("window.KONGLOGAME.__test.getResearchTokenInfo()");
+      assertEqual(info.available, 0, "tokens stay exhausted after second reload");
+      assertEqual(info.uses.length, 3, "three uses after second reload");
+    });
+
+    await test("Klaim gagal karena saldo penuh tidak memakai token atau pending", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: " +
+          (MAX_SAFE_MONEY - 1) +
+          ", assets: { business: { 0: 1 } } }); window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 60000); window.KONGLOGAME.__test.settleOfflineIncome();",
+      );
+      const before = await getState();
+      assert(before.offline.pendingGross > 0, "pending income exists");
+      const claim = await evaluate(
+        "window.KONGLOGAME.__test.claimOfflineIncome()",
+      );
+      const after = await getState();
+      assertEqual(claim, false, "claim rejected at wallet capacity");
+      assertEqual(after.money, before.money, "money unchanged");
+      assertEqual(
+        after.offline.pendingGross,
+        before.offline.pendingGross,
+        "pending income preserved",
+      );
+      assertEqual(
+        after.offline.tokenUses.length,
+        before.offline.tokenUses.length,
+        "token preserved",
+      );
+      const toast = await readLastToast();
+      assert(toast && /Saldo utama penuh/.test(toast.text), "capacity toast");
+
+      await evalVoid("window.KONGLOGAME.__test.setMoney(0);");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.claimOfflineIncome()"),
+        true,
+        "claim succeeds after capacity freed",
+      );
+      const final = await getState();
+      assertEqual(final.offline.pendingGross, 0, "pending cleared on success");
+      assertEqual(final.offline.tokenUses.length, 1, "token used on success");
+    });
+
+    await test("Klaim gagal karena token habis tidak menghapus pending", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setOffline({ tokenUses: [Date.now() - 3000, Date.now() - 2000, Date.now() - 1000] }); window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 60000); window.KONGLOGAME.__test.settleOfflineIncome();",
+      );
+      const before = await getState();
+      assert(before.offline.pendingGross > 0, "pending income exists");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.claimOfflineIncome()"),
+        false,
+        "claim rejected without tokens",
+      );
+      const after = await getState();
+      assertEqual(after.money, before.money, "money unchanged");
+      assertEqual(
+        after.offline.pendingGross,
+        before.offline.pendingGross,
+        "pending preserved",
+      );
+      assertEqual(after.offline.tokenUses.length, 3, "tokens unchanged");
+    });
+
+    await test("Settle ganda berdekatan tidak menggandakan periode dividen atau bunga", async () => {
+      await resetState();
+      const result = await evaluate(
+        "(() => { const api = window.KONGLOGAME; const t = Date.now() - 600000; api.__test.setState({ money: 0, savingsAccount: 1000000, assets: { stocks: { 0: 10 } } }); api.__test.setTimer('dividendPaidAt', t); api.__test.setTimer('savingsInterestAt', t); api.__test.setOfflineLastSeen(t); const first = api.__test.settleOfflineIncome(); const pendingAfterFirst = api.__test.getOfflineIncomeInfo().pendingGross; const second = api.__test.settleOfflineIncome(); const pendingAfterSecond = api.__test.getOfflineIncomeInfo().pendingGross; return { first, second, delta: pendingAfterSecond - pendingAfterFirst }; })()",
+      );
+      assert(result.first.dividendPeriods > 0, "first settle credits dividends");
+      assert(result.first.interestPeriods > 0, "first settle credits interest");
+      assertEqual(result.second.dividendPeriods, 0, "second settle credits no dividends");
+      assertEqual(result.second.interestPeriods, 0, "second settle credits no interest");
+      assert(result.delta < 1, "second settle adds no meaningful income");
+    });
+
+    await test("Settle offline tidak menyebabkan dividen dan bunga dibayar ganda saat tick", async () => {
+      await resetState();
+      const result = await evaluate(
+        "(() => { const api = window.KONGLOGAME; const t = Date.now() - 600000; api.__test.setState({ money: 0, savingsAccount: 1000000, assets: { stocks: { 0: 10 } } }); api.__test.setTimer('dividendPaidAt', t); api.__test.setTimer('savingsInterestAt', t); api.__test.setTimer('stockUpdatedAt', Date.now()); api.__test.setTimer('sweepAt', Date.now()); api.__test.setTimer('autoSaveAt', Date.now()); api.__test.setTimer('savedAt', Date.now()); api.__test.setOfflineLastSeen(t); api.__test.settleOfflineIncome(); const before = api.getState(); api.__test.gameTick(); const after = api.getState(); return { dividendDelta: after.stockDividends - before.stockDividends, savingsDelta: after.savingsAccount - before.savingsAccount, dividendTimer: after.timers.dividendPaidAt, interestTimer: after.timers.savingsInterestAt, now: Date.now() }; })()",
+      );
+      assertClose(result.dividendDelta, 0, 0.000001, "no extra dividend after settle");
+      assertClose(result.savingsDelta, 0, 0.000001, "no extra savings interest after settle");
+      assert(result.dividendTimer <= result.now, "dividend timer not in the future");
+      assert(result.interestTimer <= result.now, "interest timer not in the future");
+    });
+
+    await test("API test tidak terekspos di production", async () => {
+      await cdp.send("Page.removeScriptToEvaluateOnNewDocument", {
+        identifier: testScript.identifier,
+      });
+      const loaded = cdp.once("Page.loadEventFired", 20000);
+      await cdp.send("Page.reload", { ignoreCache: true });
+      await loaded.catch(() => null);
+      await waitForApp(false);
+      const exposure = await evaluate(
+        "({ test: typeof window.KONGLOGAME.__test, gameTick: typeof window.KONGLOGAME.gameTick, updateStockPrices: typeof window.KONGLOGAME.updateStockPrices, buyAssetAll: typeof window.KONGLOGAME.buyAssetAll, flag: typeof window.__KONGLOGAME_TEST__ })",
+      );
+      assertEqual(exposure.test, "undefined", "__test hidden");
+      assertEqual(exposure.gameTick, "undefined", "gameTick hidden");
+      assertEqual(
+        exposure.updateStockPrices,
+        "undefined",
+        "updateStockPrices hidden",
+      );
+      assertEqual(exposure.flag, "undefined", "test flag not inherited");
+      assertEqual(exposure.buyAssetAll, "function", "public buyAssetAll kept");
     });
 
     await test("Tidak ada error console selama pengujian", async () => {

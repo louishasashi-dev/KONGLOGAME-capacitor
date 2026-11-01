@@ -71,6 +71,12 @@ const ECONOMY_CONFIG = {
     sweepIntervalMs: 30000,
     saveIntervalMs: 5000,
   },
+  offline: {
+    maxSessionMs: 10 * 60 * 1000,
+    taxRate: 0.35,
+    maxTokens: 3,
+    tokenWindowMs: 24 * 60 * 60 * 1000,
+  },
   feedback: {
     toastDurationMs: 3600,
   },
@@ -850,6 +856,11 @@ function createDefaultState(now = nowMs()) {
     },
     stockCostBasis: {},
     timers: createDefaultTimers(now),
+    offline: {
+      lastSeenAt: now,
+      pendingGross: 0,
+      tokenUses: [],
+    },
     stats: {
       totalSavingsInterest: 0,
       totalStockIncome: 0,
@@ -944,6 +955,219 @@ function calculatePassiveIncome() {
 function getCurrentIncome() {
   const { physical, business } = calculatePassiveIncome();
   return getMiningRate() + physical + business;
+}
+
+function getOfflineTimerTiming(lastPaidAt, elapsedMs, intervalMs, now) {
+  const creditMs = Math.min(
+    Math.max(0, safeNumber(elapsedMs, 0)),
+    ECONOMY_CONFIG.offline.maxSessionMs,
+  );
+  const closeAt = now - elapsedMs;
+  // Timers normalized during load are already at "now"; advance only timers
+  // that were still valid at the moment the player left.
+  if (!Number.isFinite(lastPaidAt) || lastPaidAt > closeAt) {
+    return {
+      creditedPeriods: Math.floor(creditMs / intervalMs),
+      elapsedPeriods: 0,
+    };
+  }
+
+  const offset = clamp(closeAt - lastPaidAt, 0, intervalMs - 1);
+  return {
+    creditedPeriods: Math.floor((creditMs + offset) / intervalMs),
+    elapsedPeriods: Math.floor((elapsedMs + offset) / intervalMs),
+  };
+}
+
+function advanceOfflineTimer(key, periods, intervalMs, now) {
+  if (!Number.isFinite(periods) || periods <= 0) return;
+  const last = gameState.timers[key];
+  if (!Number.isFinite(last)) return;
+  gameState.timers[key] = Math.min(now, last + periods * intervalMs);
+}
+
+function calculateOfflineIncome(elapsedMs, now = nowMs()) {
+  const config = ECONOMY_CONFIG.offline;
+  const rawMs = Math.max(0, safeNumber(elapsedMs, 0));
+  const cappedMs = Math.min(rawMs, config.maxSessionMs);
+  const seconds = cappedMs / 1000;
+  const { physical, business } = calculatePassiveIncome();
+  const mining = getMiningRate() * seconds;
+  const physicalIncome = physical * seconds;
+  const businessIncome = business * seconds;
+  const dividendTiming = getOfflineTimerTiming(
+    gameState.timers.dividendPaidAt,
+    rawMs,
+    ECONOMY_CONFIG.stocks.dividendIntervalMs,
+    now,
+  );
+  const stockDividends =
+    getStockDividendPerPeriod() * dividendTiming.creditedPeriods;
+  const interestTiming = getOfflineTimerTiming(
+    gameState.timers.savingsInterestAt,
+    rawMs,
+    ECONOMY_CONFIG.savings.interestIntervalMs,
+    now,
+  );
+  const savingsInterest =
+    gameState.savingsAccount *
+    (Math.pow(
+      1 + ECONOMY_CONFIG.savings.interestRate,
+      interestTiming.creditedPeriods,
+    ) -
+      1);
+  const gross = safeMoney(
+    mining +
+      physicalIncome +
+      businessIncome +
+      stockDividends +
+      savingsInterest,
+  );
+  const net = safeMoney(gross * (1 - config.taxRate));
+
+  return {
+    seconds,
+    mining,
+    physical: physicalIncome,
+    business: businessIncome,
+    stockDividends,
+    savingsInterest,
+    dividendPeriods: dividendTiming.creditedPeriods,
+    dividendElapsedPeriods: dividendTiming.elapsedPeriods,
+    interestPeriods: interestTiming.creditedPeriods,
+    interestElapsedPeriods: interestTiming.elapsedPeriods,
+    gross,
+    net,
+    tax: gross - net,
+  };
+}
+
+function settleOfflineIncome(now = nowMs()) {
+  const offline = gameState.offline;
+  const lastSeen = Number.isFinite(offline.lastSeenAt)
+    ? offline.lastSeenAt
+    : now;
+  const elapsed = Math.max(0, now - lastSeen);
+  offline.lastSeenAt = now;
+  const income = calculateOfflineIncome(elapsed, now);
+  advanceOfflineTimer(
+    "dividendPaidAt",
+    income.dividendElapsedPeriods,
+    ECONOMY_CONFIG.stocks.dividendIntervalMs,
+    now,
+  );
+  advanceOfflineTimer(
+    "savingsInterestAt",
+    income.interestElapsedPeriods,
+    ECONOMY_CONFIG.savings.interestIntervalMs,
+    now,
+  );
+  if (income.gross > 0) {
+    offline.pendingGross = safeMoney(offline.pendingGross + income.gross);
+  }
+  return income;
+}
+
+function getTokenUses(now = nowMs()) {
+  const windowMs = ECONOMY_CONFIG.offline.tokenWindowMs;
+  return (gameState.offline.tokenUses || [])
+    .filter(
+      (value) =>
+        Number.isFinite(value) &&
+        value > 0 &&
+        value <= now &&
+        now - value < windowMs,
+    )
+    .sort((a, b) => a - b);
+}
+
+function getResearchTokenInfo(now = nowMs()) {
+  const uses = getTokenUses(now);
+  const max = ECONOMY_CONFIG.offline.maxTokens;
+  const available = Math.max(0, max - uses.length);
+  return {
+    available,
+    max,
+    uses,
+    nextTokenAt:
+      available > 0 ? null : uses[0] + ECONOMY_CONFIG.offline.tokenWindowMs,
+  };
+}
+
+function getOfflineIncomeInfo(now = nowMs()) {
+  const tokens = getResearchTokenInfo(now);
+  const pendingGross = safeMoney(gameState.offline.pendingGross);
+  return {
+    tokens: tokens.available,
+    maxTokens: tokens.max,
+    nextTokenAt: tokens.nextTokenAt,
+    pendingGross,
+    pendingNet: safeMoney(
+      pendingGross * (1 - ECONOMY_CONFIG.offline.taxRate),
+    ),
+    taxRate: ECONOMY_CONFIG.offline.taxRate,
+  };
+}
+
+function formatWibTime(timestamp) {
+  if (!Number.isFinite(timestamp)) return "-";
+  try {
+    return (
+      new Intl.DateTimeFormat("id-ID", {
+        timeZone: "Asia/Jakarta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+        .format(new Date(timestamp))
+        .replace(":", ".") + " WIB"
+    );
+  } catch (error) {
+    return new Date(timestamp).toLocaleTimeString() + " WIB";
+  }
+}
+
+function claimOfflineIncome(now = nowMs()) {
+  const offline = gameState.offline;
+  const gross = safeMoney(offline.pendingGross);
+  if (gross <= 0) {
+    showToast("Belum ada offline income untuk diklaim.", "error");
+    return false;
+  }
+
+  const tokens = getResearchTokenInfo(now);
+  if (tokens.available <= 0) {
+    showToast(
+      "Token riset habis. Token kembali pada jam " +
+        formatWibTime(tokens.nextTokenAt) +
+        ".",
+      "error",
+    );
+    return false;
+  }
+
+  const net = safeMoney(gross * (1 - ECONOMY_CONFIG.offline.taxRate));
+  if (net > getRemainingCapacity(gameState.money)) {
+    showToast("Saldo utama penuh. Klaim offline income ditunda.", "error");
+    return false;
+  }
+
+  addMoney(net);
+  offline.pendingGross = 0;
+  offline.tokenUses = tokens.uses
+    .concat(now)
+    .slice(-ECONOMY_CONFIG.offline.maxTokens);
+  updateDashboardUI();
+  saveGame();
+  showToast(
+    "Offline income " +
+      formatUsd(net) +
+      " diklaim setelah pajak 35%. Token tersisa " +
+      (tokens.available - 1) +
+      ".",
+    "success",
+  );
+  return true;
 }
 
 function getStockPrice(index) {
@@ -1554,6 +1778,28 @@ function updateStatsDrawerUI() {
     "statsPortfolioValue",
     formatUsd(getStockPortfolio().value, { compact: true }),
   );
+  updateOfflineUI();
+}
+
+function updateOfflineUI() {
+  const info = getOfflineIncomeInfo();
+  setText("offlineTokens", info.tokens + " / " + info.maxTokens);
+  setText("offlineAvailable", formatUsd(info.pendingGross));
+  setText("offlineNet", formatUsd(info.pendingNet));
+
+  const returnRow = getElement("offlineTokenReturnRow");
+  if (returnRow) returnRow.hidden = info.tokens > 0 || !info.nextTokenAt;
+  setText(
+    "offlineTokenReturn",
+    info.nextTokenAt
+      ? "Token kembali pada jam " + formatWibTime(info.nextTokenAt)
+      : "-",
+  );
+
+  const claimBtn = getElement("claimOfflineBtn");
+  if (claimBtn) {
+    claimBtn.disabled = info.pendingGross <= 0 || info.tokens <= 0;
+  }
 }
 
 function updateMarketCadenceText() {
@@ -2271,6 +2517,37 @@ function normalizeTimers(rawTimers, now) {
   return defaults;
 }
 
+function normalizeOffline(rawOffline, now) {
+  const config = ECONOMY_CONFIG.offline;
+  const offline = {
+    lastSeenAt: now,
+    pendingGross: 0,
+    tokenUses: [],
+  };
+  if (!rawOffline || typeof rawOffline !== "object") return offline;
+
+  const lastSeen = rawOffline.lastSeenAt;
+  if (Number.isFinite(lastSeen) && lastSeen > 0 && lastSeen <= now) {
+    offline.lastSeenAt = lastSeen;
+  }
+  offline.pendingGross = normalizeNumber(rawOffline.pendingGross, 0);
+
+  const uses = Array.isArray(rawOffline.tokenUses)
+    ? rawOffline.tokenUses
+    : [];
+  offline.tokenUses = uses
+    .filter(
+      (value) =>
+        Number.isFinite(value) &&
+        value > 0 &&
+        value <= now &&
+        now - value < config.tokenWindowMs,
+    )
+    .sort((a, b) => a - b)
+    .slice(-config.maxTokens);
+  return offline;
+}
+
 function normalizeStockMarket(rawMarket, now) {
   const prices = [];
   const history = [];
@@ -2371,6 +2648,7 @@ function migrateSave(rawSave) {
   state.assets = normalizeAssets(rawSave.assets);
   state.stockMarket = normalizeStockMarket(rawSave.stockMarket, now);
   state.timers = normalizeTimers(rawSave.timers, now);
+  state.offline = normalizeOffline(rawSave.offline, now);
 
   const rawStats = rawSave.stats && typeof rawSave.stats === "object" ? rawSave.stats : {};
   state.stats.totalSavingsInterest = normalizeNumber(rawStats.totalSavingsInterest, 0);
@@ -2430,6 +2708,7 @@ function saveGame() {
 
   try {
     gameState.version = SCHEMA_VERSION;
+    gameState.offline.lastSeenAt = nowMs();
     localStorage.setItem(SAVE_KEY, JSON.stringify(gameState));
   } catch (error) {
     console.warn("KONGLOGAME: save gagal.", error);
@@ -2951,6 +3230,11 @@ function setupEventListeners() {
     });
   }
 
+  const claimOfflineBtn = getElement("claimOfflineBtn");
+  if (claimOfflineBtn) {
+    claimOfflineBtn.addEventListener("click", () => claimOfflineIncome());
+  }
+
   const backupBtn = getElement("backupBtn");
   if (backupBtn) backupBtn.addEventListener("click", backupGame);
 
@@ -2995,7 +3279,15 @@ function setupEventListeners() {
   window.addEventListener("resize", checkFloatingWalletVisibility);
   window.addEventListener("pagehide", saveGame);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") saveGame();
+    if (document.visibilityState === "hidden") {
+      stopGameLoop();
+      saveGame();
+      return;
+    }
+    settleOfflineIncome();
+    saveGame();
+    updateDashboardUI();
+    startGameLoop();
   });
 }
 
@@ -3006,8 +3298,16 @@ function startGameLoop() {
   loopTimer = window.setInterval(gameTick, 1000);
 }
 
+function stopGameLoop() {
+  if (loopTimer === null) return;
+  window.clearInterval(loopTimer);
+  loopTimer = null;
+}
+
 function init() {
   loadGame();
+  settleOfflineIncome();
+  saveGame();
   renderAllAssetCards();
   updateMarketCadenceText();
   updateStockUI();
@@ -3090,12 +3390,23 @@ function createTestApi() {
     validateBackupSave,
     restoreBackupText,
     backupGame,
-    stopLoop() {
-      if (loopTimer !== null) {
-        window.clearInterval(loopTimer);
-        loopTimer = null;
-      }
+    calculateOfflineIncome,
+    settleOfflineIncome,
+    claimOfflineIncome,
+    getOfflineIncomeInfo,
+    getResearchTokenInfo,
+    formatWibTime,
+    setOfflineLastSeen(value) {
+      gameState.offline.lastSeenAt = safeNumber(value, nowMs());
     },
+    setOffline(patch) {
+      gameState.offline = normalizeOffline(
+        { ...gameState.offline, ...patch },
+        nowMs(),
+      );
+      updateDashboardUI();
+    },
+    stopLoop: stopGameLoop,
     startLoop: startGameLoop,
   };
 }

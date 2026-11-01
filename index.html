@@ -524,6 +524,18 @@
         </section>
 
         <section class="panel compact">
+          <h3>Offline income</h3>
+          <div class="stat-list">
+            <div><span>Token riset</span><strong id="offlineTokens">3 / 3</strong></div>
+            <div id="offlineTokenReturnRow" hidden><span>Token kembali</span><strong id="offlineTokenReturn">-</strong></div>
+            <div><span>Tersedia sebelum pajak</span><strong id="offlineAvailable">$0.00</strong></div>
+            <div><span>Setelah pajak 35%</span><strong id="offlineNet">$0.00</strong></div>
+          </div>
+          <p class="helper">Maksimal 10 menit per sesi offline. Setiap klaim memakai 1 token riset.</p>
+          <button class="btn btn-secondary btn-block" id="claimOfflineBtn" type="button" disabled>Klaim offline income</button>
+        </section>
+
+        <section class="panel compact">
           <h3>Backup progres</h3>
           <p class="helper">Simpan progres ke <code>Download/KONGLOGAME-save/filesave.json</code> atau pulihkan dari file backup.</p>
           <button class="btn btn-secondary btn-block" id="backupBtn" type="button">
