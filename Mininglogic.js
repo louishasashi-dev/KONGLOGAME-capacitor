@@ -847,6 +847,7 @@ function createDefaultState(now = nowMs()) {
     savingsAccount: 0,
     stockDividends: 0,
     businessIncome: 0,
+    profitWallet: 0,
     level: 1,
     assets,
     stockMarket: {
@@ -855,6 +856,7 @@ function createDefaultState(now = nowMs()) {
       lastUpdatedAt: now,
     },
     stockCostBasis: {},
+    stockProfitWithdrawn: {},
     timers: createDefaultTimers(now),
     offline: {
       lastSeenAt: now,
@@ -1065,6 +1067,7 @@ function settleOfflineIncome(now = nowMs()) {
   if (income.gross > 0) {
     offline.pendingGross = safeMoney(offline.pendingGross + income.gross);
   }
+  runAutoWithdraw();
   return income;
 }
 
@@ -1209,6 +1212,37 @@ function getStockPortfolio() {
     pnl,
     pnlPercent: cost > 0 ? (pnl / cost) * 100 : 0,
   };
+}
+
+function runAutoWithdraw() {
+  let credited = 0;
+
+  assetData.stocks.forEach((stock, index) => {
+    const shares = getOwned("stocks", index);
+    if (shares <= 0) {
+      delete gameState.stockProfitWithdrawn[index];
+      return;
+    }
+
+    const basis = safeNumber(gameState.stockCostBasis[index], 0);
+    const pnl = shares * getStockPrice(index) - basis;
+    const withdrawn = safeNumber(gameState.stockProfitWithdrawn[index], 0);
+    const profit = pnl - withdrawn;
+    if (profit <= 0) return;
+
+    const amount = Math.min(profit, getRemainingCapacity(gameState.profitWallet));
+    if (amount <= 0) return;
+
+    addWallet("profitWallet", amount);
+    gameState.stockProfitWithdrawn[index] = Math.min(
+      MAX_SAFE_MONEY,
+      withdrawn + amount,
+    );
+    credited += amount;
+  });
+
+  if (credited > 0) updatePortfolioSummary();
+  return credited;
 }
 
 function addMoney(amount) {
@@ -1593,6 +1627,10 @@ function updatePortfolioSummary() {
       (portfolio.cost > 0 ? " (" + formatPercent(portfolio.pnlPercent) + ")" : ""),
   );
   setSignedClass(getElement("portfolioPnl"), portfolio.pnl);
+  setText(
+    "profitWallet",
+    formatUsd(gameState.profitWallet, { compact: true }),
+  );
   setText("portfolioDividend", formatUsd(dividend));
 }
 
@@ -2062,13 +2100,22 @@ function sellStock(index, quantity) {
     parsedQuantity === owned ? basis : averageBasis * parsedQuantity;
   const realizedGain = proceeds - removedBasis;
 
+  const remaining = owned - parsedQuantity;
   gameState.money = safeMoney(gameState.money + proceeds);
-  gameState.assets.stocks[index] = owned - parsedQuantity;
-  if (gameState.assets.stocks[index] <= 0) {
+  gameState.assets.stocks[index] = remaining;
+  if (remaining <= 0) {
     delete gameState.assets.stocks[index];
     delete gameState.stockCostBasis[index];
+    delete gameState.stockProfitWithdrawn[index];
   } else {
     gameState.stockCostBasis[index] = Math.max(0, basis - removedBasis);
+    const withdrawn = safeNumber(gameState.stockProfitWithdrawn[index], 0);
+    if (withdrawn > 0) {
+      gameState.stockProfitWithdrawn[index] = Math.min(
+        MAX_SAFE_MONEY,
+        withdrawn * (remaining / owned),
+      );
+    }
   }
   addStat("totalCapitalGains", realizedGain);
 
@@ -2324,6 +2371,7 @@ function updateStockPrices(now = nowMs()) {
   });
 
   gameState.stockMarket.lastUpdatedAt = now;
+  runAutoWithdraw();
   updateStockUI();
 }
 
@@ -2637,6 +2685,7 @@ function migrateSave(rawSave) {
   state.savingsAccount = normalizeNumber(rawSave.savingsAccount, 0);
   state.stockDividends = normalizeNumber(rawSave.stockDividends, 0);
   state.businessIncome = normalizeNumber(rawSave.businessIncome, 0);
+  state.profitWallet = normalizeNumber(rawSave.profitWallet, 0);
   state.level = Math.round(
     normalizeNumber(
       rawSave.level,
@@ -2665,6 +2714,11 @@ function migrateSave(rawSave) {
     rawSave.stockCostBasis && typeof rawSave.stockCostBasis === "object"
       ? rawSave.stockCostBasis
       : {};
+  const rawWithdrawn =
+    rawSave.stockProfitWithdrawn &&
+    typeof rawSave.stockProfitWithdrawn === "object"
+      ? rawSave.stockProfitWithdrawn
+      : {};
 
   assetData.stocks.forEach((stock, index) => {
     const shares = getOwnedFromAssets(state.assets, "stocks", index);
@@ -2676,6 +2730,14 @@ function migrateSave(rawSave) {
     } else {
       state.stockCostBasis[index] = Math.min(
         shares * stock.price,
+        MAX_SAFE_MONEY,
+      );
+    }
+
+    const savedWithdrawn = rawWithdrawn[index];
+    if (Number.isFinite(savedWithdrawn) && savedWithdrawn > 0) {
+      state.stockProfitWithdrawn[index] = Math.min(
+        savedWithdrawn,
         MAX_SAFE_MONEY,
       );
     }
@@ -2759,7 +2821,13 @@ function validateBackupSave(save) {
     return "File backup tidak berisi data progres KONGLOGAME.";
   }
 
-  const objectFields = ["stockMarket", "timers", "stats", "stockCostBasis"];
+  const objectFields = [
+    "stockMarket",
+    "timers",
+    "stats",
+    "stockCostBasis",
+    "stockProfitWithdrawn",
+  ];
   for (const field of objectFields) {
     if (
       save[field] !== undefined &&
@@ -3381,6 +3449,7 @@ function createTestApi() {
       }
     },
     updateStockPrices,
+    runAutoWithdraw,
     gameTick,
     payDividends: payStockDividends,
     creditInterest: creditSavingsInterest,

@@ -1237,6 +1237,154 @@ async function main() {
       assertEqual(ui.disabled, true, "All In Jual disabled after reload");
     });
 
+    await test("Auto withdraw hanya mengambil profit positif secara bertahap", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200);",
+      );
+
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        1000,
+        "first withdrawal",
+      );
+      let state = await getState();
+      assertEqual(state.profitWallet, 1000, "profit wallet after first withdrawal");
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "high-water marker");
+      assertEqual(state.money, 0, "main wallet untouched");
+      const card = await evaluate(
+        "document.getElementById('profitWallet').textContent",
+      );
+      assert(card.includes("1,000"), "Profit Wallet card updated");
+
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        0,
+        "same profit not withdrawn twice",
+      );
+      await evalVoid(
+        "window.KONGLOGAME.__test.setStockPrice(0, 150); window.KONGLOGAME.__test.runAutoWithdraw();",
+      );
+      state = await getState();
+      assertEqual(state.profitWallet, 1000, "no withdrawal below high-water");
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "marker kept on drawdown");
+
+      assertEqual(
+        await evaluate(
+          "window.KONGLOGAME.__test.setStockPrice(0, 250); window.KONGLOGAME.__test.runAutoWithdraw()",
+        ),
+        500,
+        "only incremental profit withdrawn",
+      );
+      state = await getState();
+      assertEqual(state.profitWallet, 1500, "profit wallet after recovery");
+      assertEqual(state.stockProfitWithdrawn["0"], 1500, "marker follows new high");
+    });
+
+    await test("Auto withdraw tidak mengambil saham yang sedang rugi", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 50);",
+      );
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        0,
+        "loss produces no withdrawal",
+      );
+      const state = await getState();
+      assertEqual(state.profitWallet, 0, "profit wallet stays empty");
+      assertEqual(
+        state.stockProfitWithdrawn["0"],
+        undefined,
+        "no marker on a loss",
+      );
+    });
+
+    await test("Auto withdraw berjalan saat offline dan tidak menggandakan profit", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 60000); window.KONGLOGAME.__test.settleOfflineIncome();",
+      );
+      let state = await getState();
+      assertEqual(state.profitWallet, 1000, "offline settlement withdraws profit");
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "offline marker");
+      assertEqual(state.stockCostBasis["0"], 1000, "cost basis untouched");
+
+      await evalVoid("window.KONGLOGAME.__test.settleOfflineIncome();");
+      state = await getState();
+      assertEqual(state.profitWallet, 1000, "repeated settle does not duplicate");
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "marker unchanged");
+    });
+
+    await test("Auto withdraw menyesuaikan marker saat jual sebagian dan reset saat habis", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.runAutoWithdraw(); window.KONGLOGAME.sellStock(0, 5);",
+      );
+      let state = await getState();
+      assertEqual(state.assets.stocks["0"], 5, "remaining shares");
+      assertEqual(state.stockCostBasis["0"], 500, "remaining basis");
+      assertEqual(state.stockProfitWithdrawn["0"], 500, "marker scaled with sale");
+      assertEqual(state.money, 1000, "sale proceeds unchanged");
+
+      assertEqual(
+        await evaluate(
+          "window.KONGLOGAME.__test.setStockPrice(0, 300); window.KONGLOGAME.__test.runAutoWithdraw()",
+        ),
+        500,
+        "new profit above scaled marker withdrawn",
+      );
+      state = await getState();
+      assertEqual(state.profitWallet, 1500, "profit wallet after partial sale");
+
+      await evalVoid("window.KONGLOGAME.sellStockAll(0);");
+      state = await getState();
+      assertEqual(state.assets.stocks["0"], undefined, "position fully sold");
+      assertEqual(
+        state.stockProfitWithdrawn["0"],
+        undefined,
+        "marker reset after full sale",
+      );
+      assertEqual(state.profitWallet, 1500, "profit wallet survives sale");
+    });
+
+    await test("Profit Wallet dan marker bertahan setelah reload", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.runAutoWithdraw(); window.KONGLOGAME.saveGame();",
+      );
+      const before = await getState();
+      assertEqual(before.profitWallet, 1000, "wallet before reload");
+      assertEqual(before.stockProfitWithdrawn["0"], 1000, "marker before reload");
+
+      await reloadApp();
+      const after = await getState();
+      assertEqual(after.profitWallet, 1000, "wallet after reload");
+      assertEqual(after.stockProfitWithdrawn["0"], 1000, "marker after reload");
+      assertEqual(after.assets.stocks["0"], 10, "shares after reload");
+      assertEqual(after.stockCostBasis["0"], 1000, "basis after reload");
+    });
+
+    await test("Save lama tanpa Profit Wallet dimigrasi tanpa menarik profit", async () => {
+      await seedSave({
+        version: 3,
+        money: 500,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [], history: [] },
+        stockCostBasis: { 0: 10000 },
+        stats: {},
+      });
+      const state = await getState();
+      assertEqual(state.profitWallet, 0, "profit wallet defaults to zero");
+      assertEqual(
+        state.stockProfitWithdrawn["0"],
+        undefined,
+        "marker defaults to empty",
+      );
+      assertEqual(state.stockCostBasis["0"], 10000, "old basis preserved");
+      assertEqual(state.money, 500, "old money preserved");
+    });
+
     await test("Income, dividen, dan bunga tidak overflow di batas maksimum", async () => {
       await resetState();
       await evalVoid(
