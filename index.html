@@ -385,6 +385,29 @@
             </div>
           </div>
 
+          <section class="panel compact profit-withdraw-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">Profit Wallet</span>
+                <h2>Tarik profit ke saldo utama</h2>
+              </div>
+              <svg class="icon panel-icon" aria-hidden="true"><use href="#i-wallet"></use></svg>
+            </div>
+            <div class="wallet-list">
+              <div><span>Profit Wallet</span><strong id="profitWithdrawSource">$0.00</strong></div>
+              <div><span>Saldo utama</span><strong id="profitWithdrawTarget">$0.00</strong></div>
+            </div>
+            <label class="field">
+              <span>Jumlah withdraw (USD)</span>
+              <input id="profitWithdrawAmount" type="number" inputmode="decimal" min="0" step="any" placeholder="0" />
+            </label>
+            <div class="button-row">
+              <button class="btn btn-secondary" id="profitWithdrawBtn" type="button" data-action="withdraw-profit">Withdraw</button>
+              <button class="btn btn-secondary" id="profitWithdrawAllBtn" type="button" data-action="withdraw-profit-all">Semua</button>
+            </div>
+            <p class="helper">Auto Withdraw menjual sebagian saham dan hasilnya masuk ke Profit Wallet. Withdraw ke saldo utama tidak dihitung sebagai income baru.</p>
+          </section>
+
           <div class="market-note">
             <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
             <div>
@@ -505,6 +528,8 @@
             <div><span>Dividen saham</span><strong id="statsStock">$0.00</strong></div>
             <div><span>Pendapatan bisnis</span><strong id="statsBusiness">$0.00</strong></div>
             <div><span>Capital gain terealisasi</span><strong id="statsCapitalGains">$0.00</strong></div>
+            <div><span>Unrealized P/L saham</span><strong id="statsStockUnrealized">$0.00</strong></div>
+            <div><span>Total pendapatan</span><strong id="statsTotalIncome">$0.00</strong></div>
           </div>
         </section>
 
@@ -515,7 +540,18 @@
             <div><span>Rupiah</span><strong id="statsRupiah">Rp 0</strong></div>
             <div><span>Dividen saham tertunda</span><strong id="statsStockWallet">$0.00</strong></div>
             <div><span>Pendapatan bisnis tertunda</span><strong id="statsBusinessWallet">$0.00</strong></div>
+            <div><span>Profit Wallet</span><strong id="statsProfitWallet">$0.00</strong></div>
           </div>
+        </section>
+
+        <section class="panel compact">
+          <h3>Profit per saham</h3>
+          <div class="stat-list" id="stockProfitTotals"></div>
+        </section>
+
+        <section class="panel compact">
+          <h3>Riwayat profit terbaru</h3>
+          <div class="history-list" id="profitHistoryList"></div>
         </section>
 
         <section class="panel compact">

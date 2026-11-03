@@ -642,7 +642,8 @@ code {
 }
 
 .wallet-list > div,
-.stat-list > div {
+.stat-list > div,
+.history-list > div {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -654,13 +655,15 @@ code {
 }
 
 .wallet-list > div:last-child,
-.stat-list > div:last-child {
+.stat-list > div:last-child,
+.history-list > div:last-child {
   padding-bottom: 0;
   border-bottom: 0;
 }
 
 .wallet-list strong,
-.stat-list strong {
+.stat-list strong,
+.history-list strong {
   color: var(--text);
   font-family: var(--mono);
   font-size: 0.79rem;
@@ -670,8 +673,36 @@ code {
   overflow-wrap: anywhere;
 }
 
-.stat-list {
+.stat-list,
+.history-list {
   margin-top: 10px;
+}
+
+.history-list > div > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.history-list > div > div > span:first-child {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.history-time {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+}
+
+.empty-state {
+  color: var(--faint);
+  font-size: 0.75rem;
+}
+
+.profit-withdraw-panel {
+  margin-bottom: 14px;
 }
 
 /* Page heading and summary */

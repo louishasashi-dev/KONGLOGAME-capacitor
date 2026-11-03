@@ -375,6 +375,10 @@ async function main() {
           JSON.stringify(SAVE_KEY) +
           "); return raw ? JSON.parse(raw) : null; })()",
       );
+    const readTotalIncome = () =>
+      evaluate(
+        "Number(document.getElementById('statsTotalIncome').textContent.replace(/[^0-9.-]/g, ''))",
+      );
     const resetState = async () => {
       await evalVoid(
         "window.KONGLOGAME.__test.stopLoop(); window.KONGLOGAME.__test.resetState();",
@@ -404,6 +408,25 @@ async function main() {
       evaluate(
         "(() => { const items = document.querySelectorAll('#toastContainer .toast'); if (!items.length) return null; const last = items[items.length - 1]; return { text: last.textContent, className: last.className }; })()",
       );
+    const clickProfitWithdraw = async (value) => {
+      await evalVoid(
+        "(() => { const input = document.getElementById('profitWithdrawAmount'); input.value = " +
+          JSON.stringify(String(value)) +
+          "; document.getElementById('profitWithdrawBtn').click(); })()",
+      );
+    };
+    const legacyB3Save = (overrides = {}) => ({
+      version: 4,
+      money: 0,
+      assets: { stocks: { 0: 10 } },
+      stockMarket: { prices: [200], history: [[200]] },
+      stockCostBasis: { 0: 1000 },
+      stockProfitWithdrawn: { 0: 1000 },
+      stockProfitTotals: { 0: 1000 },
+      profitWallet: 1000,
+      stats: { totalCapitalGains: 1000 },
+      ...overrides,
+    });
 
     await test("All In dengan saldo cukup membeli saham sesuai harga terkini", async () => {
       await resetState();
@@ -642,7 +665,7 @@ async function main() {
 
       const saved = await getSaved();
       assertEqual(saved.assets.business["0"], 1, "saved level");
-      assertEqual(saved.version, 3, "save version");
+      assertEqual(saved.version, 5, "save version");
     });
 
     await test("Ekspansi berikutnya menaikkan level dengan biaya progresif", async () => {
@@ -821,7 +844,7 @@ async function main() {
         stats: {},
       });
       const state = await getState();
-      assertEqual(state.version, 3, "migrated save version");
+      assertEqual(state.version, 5, "migrated save version");
       assertEqual(state.assets.business["0"], 1, "business level 1");
       assertEqual(state.assets.industry["0"], 1, "industry level 1");
       assertEqual(state.money, 1234, "money preserved");
@@ -892,7 +915,7 @@ async function main() {
       await reloadApp();
 
       const after = await getState();
-      assertEqual(after.version, 3, "version after reload");
+      assertEqual(after.version, 5, "version after reload");
       assertEqual(after.money, before.money, "money after reload");
       assertEqual(after.assets.business["0"], 4, "business level after reload");
       assertEqual(after.assets.industry["0"], 2, "industry level after reload");
@@ -979,7 +1002,7 @@ async function main() {
       );
       const savedBefore = await getSaved();
       assert(savedBefore, "save exists before refresh");
-      assertEqual(savedBefore.version, 3, "save version");
+      assertEqual(savedBefore.version, 5, "save version");
       assertEqual(savedBefore.assets.stocks["0"], 10, "saved shares before refresh");
 
       await reloadApp();
@@ -1237,7 +1260,7 @@ async function main() {
       assertEqual(ui.disabled, true, "All In Jual disabled after reload");
     });
 
-    await test("Auto withdraw hanya mengambil profit positif secara bertahap", async () => {
+    await test("Auto withdraw menjual sebagian saham dan mengkredit realized gain", async () => {
       await resetState();
       await evalVoid(
         "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200);",
@@ -1246,42 +1269,79 @@ async function main() {
       assertEqual(
         await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
         1000,
-        "first withdrawal",
+        "proceeds credited",
       );
       let state = await getState();
-      assertEqual(state.profitWallet, 1000, "profit wallet after first withdrawal");
-      assertEqual(state.stockProfitWithdrawn["0"], 1000, "high-water marker");
+      assertEqual(state.profitWallet, 1000, "profit wallet receives proceeds");
       assertEqual(state.money, 0, "main wallet untouched");
-      const card = await evaluate(
-        "document.getElementById('profitWallet').textContent",
+      assertEqual(state.assets.stocks["0"], 5, "shares actually sold");
+      assertEqual(state.stockCostBasis["0"], 500, "basis reduced with shares");
+      assertEqual(state.stockProfitWithdrawn["0"], 500, "removed basis marker");
+      assertEqual(state.stats.totalCapitalGains, 500, "realized gain not proceeds");
+      assertEqual(state.stockProfitTotals["0"], 500, "display total uses gain");
+      assertEqual(state.profitHistory[0].amount, 500, "history uses gain");
+      assertEqual(await readTotalIncome(), 500, "Total Income uses realized gain");
+
+      const ui = await evaluate(
+        "({ wallet: document.getElementById('profitWallet').textContent, unrealized: document.getElementById('statsStockUnrealized').textContent })",
       );
-      assert(card.includes("1,000"), "Profit Wallet card updated");
+      assert(ui.wallet.includes("1,000"), "Profit Wallet card updated");
+      assert(ui.unrealized.includes("+$500.00"), "unrealized P/L from portfolio");
 
       assertEqual(
         await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
         0,
-        "same profit not withdrawn twice",
+        "same price is not sold twice",
       );
       await evalVoid(
         "window.KONGLOGAME.__test.setStockPrice(0, 150); window.KONGLOGAME.__test.runAutoWithdraw();",
       );
       state = await getState();
-      assertEqual(state.profitWallet, 1000, "no withdrawal below high-water");
-      assertEqual(state.stockProfitWithdrawn["0"], 1000, "marker kept on drawdown");
+      assertEqual(state.profitWallet, 1000, "drawdown sells nothing");
+      assertEqual(state.assets.stocks["0"], 5, "drawdown keeps shares");
+      assertEqual(state.stockProfitWithdrawn["0"], 500, "marker kept on drawdown");
 
       assertEqual(
         await evaluate(
           "window.KONGLOGAME.__test.setStockPrice(0, 250); window.KONGLOGAME.__test.runAutoWithdraw()",
         ),
-        500,
-        "only incremental profit withdrawn",
+        250,
+        "only incremental profit sold",
       );
       state = await getState();
-      assertEqual(state.profitWallet, 1500, "profit wallet after recovery");
-      assertEqual(state.stockProfitWithdrawn["0"], 1500, "marker follows new high");
+      assertEqual(state.profitWallet, 1250, "profit wallet after recovery");
+      assertEqual(state.assets.stocks["0"], 4, "one more share sold");
+      assertEqual(state.stockCostBasis["0"], 400, "basis after second sale");
+      assertEqual(state.stockProfitWithdrawn["0"], 600, "marker adds removed basis");
+      assertEqual(state.stats.totalCapitalGains, 650, "new realized gain added");
     });
 
-    await test("Auto withdraw tidak mengambil saham yang sedang rugi", async () => {
+    await test("Auto withdraw menghormati kapasitas Profit Wallet tanpa memakai saldo utama", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: " +
+          MAX_SAFE_MONEY +
+          ", profitWallet: " +
+          (MAX_SAFE_MONEY - 500) +
+          ", assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 } }); window.KONGLOGAME.__test.setStockPrice(0, 200);",
+      );
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        400,
+        "sale limited by whole shares under capacity",
+      );
+      const state = await getState();
+      assertEqual(state.money, MAX_SAFE_MONEY, "main wallet untouched at cap");
+      assertEqual(state.assets.stocks["0"], 8, "only affordable whole shares sold");
+      assertEqual(state.profitWallet, MAX_SAFE_MONEY - 100, "proceeds fit Profit Wallet");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        0,
+        "capacity below one share sells nothing",
+      );
+    });
+
+    await test("Auto withdraw tidak menjual saham yang sedang rugi", async () => {
       await resetState();
       await evalVoid(
         "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 50);",
@@ -1289,10 +1349,11 @@ async function main() {
       assertEqual(
         await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
         0,
-        "loss produces no withdrawal",
+        "loss produces no sale",
       );
       const state = await getState();
       assertEqual(state.profitWallet, 0, "profit wallet stays empty");
+      assertEqual(state.assets.stocks["0"], 10, "shares unchanged");
       assertEqual(
         state.stockProfitWithdrawn["0"],
         undefined,
@@ -1300,69 +1361,685 @@ async function main() {
       );
     });
 
-    await test("Auto withdraw berjalan saat offline dan tidak menggandakan profit", async () => {
+    await test("Auto withdraw menjual seluruh posisi tanpa basis dan membersihkan marker", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 0 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200);",
+      );
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        2000,
+        "full position sold",
+      );
+      const state = await getState();
+      assertEqual(state.assets.stocks["0"], undefined, "shares removed");
+      assertEqual(state.stockCostBasis["0"], undefined, "basis removed");
+      assertEqual(state.stockProfitWithdrawn["0"], undefined, "marker removed");
+      assertEqual(state.stats.totalCapitalGains, 2000, "full realized gain");
+      assertEqual(state.profitWallet, 2000, "full proceeds credited");
+    });
+
+    await test("Auto withdraw berjalan saat offline dan tidak menggandakan penjualan", async () => {
       await resetState();
       await evalVoid(
         "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.setOfflineLastSeen(Date.now() - 60000); window.KONGLOGAME.__test.settleOfflineIncome();",
       );
       let state = await getState();
-      assertEqual(state.profitWallet, 1000, "offline settlement withdraws profit");
-      assertEqual(state.stockProfitWithdrawn["0"], 1000, "offline marker");
-      assertEqual(state.stockCostBasis["0"], 1000, "cost basis untouched");
+      assertEqual(state.profitWallet, 1000, "offline settlement sells shares");
+      assertEqual(state.assets.stocks["0"], 5, "offline shares reduced");
+      assertEqual(state.stockProfitWithdrawn["0"], 500, "offline marker");
+      assertEqual(state.stockCostBasis["0"], 500, "offline basis reduced");
 
       await evalVoid("window.KONGLOGAME.__test.settleOfflineIncome();");
       state = await getState();
-      assertEqual(state.profitWallet, 1000, "repeated settle does not duplicate");
-      assertEqual(state.stockProfitWithdrawn["0"], 1000, "marker unchanged");
+      assertEqual(state.profitWallet, 1000, "repeated settle does not sell again");
+      assertEqual(state.assets.stocks["0"], 5, "repeated settle keeps shares");
+      assertEqual(state.stockProfitWithdrawn["0"], 500, "marker unchanged");
     });
 
-    await test("Auto withdraw menyesuaikan marker saat jual sebagian dan reset saat habis", async () => {
+    await test("Manual Withdraw sebagian", async () => {
       await resetState();
       await evalVoid(
-        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.runAutoWithdraw(); window.KONGLOGAME.sellStock(0, 5);",
+        "window.KONGLOGAME.__test.setState({ money: 0, profitWallet: 1000, assets: { stocks: {} }, stats: { totalSavingsInterest: 0, totalStockIncome: 0, totalBusinessIncome: 0, totalCapitalGains: 0 } });",
+      );
+      const beforeStats = await evaluate(
+        "({ s: window.KONGLOGAME.getState().stats, m: window.KONGLOGAME.getState().money, p: window.KONGLOGAME.getState().profitWallet })",
+      );
+      await clickProfitWithdraw(400);
+      const after = await getState();
+      assertEqual(after.profitWallet, 600, "profit wallet reduced");
+      assertEqual(after.money, 400, "main wallet increased");
+      assertEqual(after.stats.totalSavingsInterest, beforeStats.s.totalSavingsInterest, "savings stat unchanged");
+      assertEqual(after.stats.totalStockIncome, beforeStats.s.totalStockIncome, "stock income stat unchanged");
+      assertEqual(after.stats.totalBusinessIncome, beforeStats.s.totalBusinessIncome, "business income stat unchanged");
+      assertEqual(after.stats.totalCapitalGains, beforeStats.s.totalCapitalGains, "capital gains stat unchanged");
+    });
+
+    await test("Manual Withdraw seluruh saldo", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 10, profitWallet: 250 });",
+      );
+      await clickProfitWithdraw(250);
+      const after = await getState();
+      assertEqual(after.profitWallet, 0, "profit wallet emptied");
+      assertEqual(after.money, 260, "main wallet full transfer");
+    });
+
+    await test("Input tidak valid", async () => {
+      await resetState();
+      await evalVoid("window.KONGLOGAME.__test.setState({ money: 0, profitWallet: 100 });");
+      await clickProfitWithdraw("");
+      assertEqual((await getState()).profitWallet, 100, "empty rejected");
+      await clickProfitWithdraw("-5");
+      assertEqual((await getState()).profitWallet, 100, "negative rejected");
+      await clickProfitWithdraw("abc");
+      assertEqual((await getState()).profitWallet, 100, "abc rejected");
+      await clickProfitWithdraw("1abc");
+      assertEqual((await getState()).profitWallet, 100, "1abc rejected");
+    });
+
+    await test("Saldo Profit Wallet tidak cukup", async () => {
+      await resetState();
+      await evalVoid("window.KONGLOGAME.__test.setState({ money: 0, profitWallet: 100 });");
+      await clickProfitWithdraw(150);
+      assertEqual((await getState()).profitWallet, 100, "profit wallet unchanged");
+      assertEqual((await getState()).money, 0, "main wallet unchanged");
+    });
+
+    await test("Main Wallet mencapai batas maksimum", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: " + MAX_SAFE_MONEY + ", profitWallet: 500 });",
+      );
+      await clickProfitWithdraw(100);
+      assertEqual((await getState()).profitWallet, 500, "profit wallet unchanged when main full");
+    });
+
+    await test("Manual Withdraw tidak menambah income statistics", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 5, profitWallet: 1000, stats: { totalSavingsInterest: 10, totalStockIncome: 20, totalBusinessIncome: 30, totalCapitalGains: 40 } });",
+      );
+      const before = await getState();
+      await clickProfitWithdraw(1000);
+      const after = await getState();
+      assertEqual(after.stats.totalSavingsInterest, before.stats.totalSavingsInterest, "savings unchanged");
+      assertEqual(after.stats.totalStockIncome, before.stats.totalStockIncome, "stock income unchanged");
+      assertEqual(after.stats.totalBusinessIncome, before.stats.totalBusinessIncome, "business unchanged");
+      assertEqual(after.stats.totalCapitalGains, before.stats.totalCapitalGains, "capital gains unchanged");
+      assertEqual(after.profitWallet, 0, "profit emptied");
+      assertEqual(after.money, 1005, "money moved");
+    });
+
+    await test("Total Income mengabaikan stockProfitTotals dan unrealized gain", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 1 } }, stockCostBasis: { 0: 100 }, stockProfitTotals: { 0: 9999 }, stats: { totalSavingsInterest: 0, totalStockIncome: 0, totalBusinessIncome: 0, totalCapitalGains: 0 } }); window.KONGLOGAME.__test.setStockPrice(0, 200);",
+      );
+      const state = await getState();
+      assertEqual(state.stats.totalCapitalGains, 0, "no realized gain yet");
+      assertEqual(state.stockProfitTotals["0"], 9999, "legacy display total not used");
+      assertEqual(await readTotalIncome(), 0, "Total Income stays zero");
+      const unrealized = await evaluate(
+        "document.getElementById('statsStockUnrealized').textContent",
+      );
+      assert(unrealized.includes("+$100.00"), "unrealized shown from portfolio");
+    });
+
+    await test("Jual manual setelah auto-withdraw memakai realized gain bersih", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.runAutoWithdraw(); window.KONGLOGAME.sellStock(0, 1);",
       );
       let state = await getState();
-      assertEqual(state.assets.stocks["0"], 5, "remaining shares");
-      assertEqual(state.stockCostBasis["0"], 500, "remaining basis");
-      assertEqual(state.stockProfitWithdrawn["0"], 500, "marker scaled with sale");
-      assertEqual(state.money, 1000, "sale proceeds unchanged");
-
-      assertEqual(
-        await evaluate(
-          "window.KONGLOGAME.__test.setStockPrice(0, 300); window.KONGLOGAME.__test.runAutoWithdraw()",
-        ),
-        500,
-        "new profit above scaled marker withdrawn",
-      );
-      state = await getState();
-      assertEqual(state.profitWallet, 1500, "profit wallet after partial sale");
+      assertEqual(state.assets.stocks["0"], 4, "remaining shares after manual sale");
+      assertEqual(state.stockCostBasis["0"], 400, "remaining basis after manual sale");
+      assertEqual(state.stockProfitWithdrawn["0"], 400, "marker scaled with shares");
+      assertEqual(state.stats.totalCapitalGains, 600, "manual realized gain added");
+      assertEqual(await readTotalIncome(), 600, "Total Income follows realized gains");
 
       await evalVoid("window.KONGLOGAME.sellStockAll(0);");
       state = await getState();
       assertEqual(state.assets.stocks["0"], undefined, "position fully sold");
+      assertEqual(state.stockProfitWithdrawn["0"], undefined, "marker cleared");
+      assertEqual(state.stats.totalCapitalGains, 1000, "total economic gain realized");
+      assertEqual(state.money, 1000, "all manual proceeds credited");
+      assertEqual(await readTotalIncome(), 1000, "Total Income after final sale");
+    });
+
+    await test("Auto withdraw setelah jual manual memakai marker terskala", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.runAutoWithdraw(); window.KONGLOGAME.sellStock(0, 1);",
+      );
+      assertEqual(
+        await evaluate(
+          "window.KONGLOGAME.__test.setStockPrice(0, 300); window.KONGLOGAME.__test.runAutoWithdraw()",
+        ),
+        300,
+        "incremental profit sold after manual sale",
+      );
+      const state = await getState();
+      assertEqual(state.assets.stocks["0"], 3, "shares after second auto sale");
+      assertEqual(state.stockCostBasis["0"], 300, "basis after second auto sale");
+      assertEqual(state.stockProfitWithdrawn["0"], 500, "marker includes removed basis");
+      assertEqual(state.stats.totalCapitalGains, 800, "realized gains accumulate");
+      assertEqual(state.profitWallet, 1300, "profit wallet accumulates");
+    });
+
+    await test("Persistence v5 setelah reload", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.runAutoWithdraw();",
+      );
+      await reloadApp();
+      const state = await getState();
+      assertEqual(state.version, 5, "save version after reload");
+      assertEqual(state.profitWallet, 1000, "profit wallet persisted");
+      assertEqual(state.assets.stocks["0"], 5, "sold shares persisted");
+      assertEqual(state.stockCostBasis["0"], 500, "basis persisted");
+      assertEqual(state.stockProfitWithdrawn["0"], 500, "marker persisted");
+      assertEqual(state.stats.totalCapitalGains, 500, "realized gain persisted");
+      assertEqual(state.stockProfitTotals["0"], 500, "display total persisted");
+      assertEqual(state.profitHistory.length, 1, "profit history persisted");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        0,
+        "no repeat sale after reload",
+      );
+    });
+
+    await test("Backup dan Restore untuk field baru", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 123, assets: { stocks: { 1: 3 } }, stockCostBasis: { 1: 150 }, stockProfitWithdrawn: { 1: 25 }, profitWallet: 77, stockProfitTotals: { 1: 55 }, profitHistory: [{ ticker: 'AAPL', name: 'Apple Inc.', amount: 55, at: 1700000000000 }], stats: { totalSavingsInterest: 1, totalStockIncome: 2, totalBusinessIncome: 3, totalCapitalGains: 4, legacyCapitalGains: 5 } });",
+      );
+      const backup = await evaluate("window.KONGLOGAME.__test.createBackupJson()");
+      await evalVoid("window.KONGLOGAME.__test.setState({ money: 1, assets: {}, stockProfitWithdrawn: {}, profitWallet: 0, stockProfitTotals: {}, profitHistory: [], stats: {} });");
+      const result = await evaluate("window.KONGLOGAME.__test.restoreBackupText(" + JSON.stringify(backup) + ")");
+      assertEqual(result, null, "restore ok");
+      const state = await getState();
+      assertEqual(state.profitWallet, 77, "profit wallet restored");
+      assertEqual(state.stockProfitWithdrawn["1"], 25, "marker restored");
+      assertEqual(state.stockProfitTotals["1"], 55, "profit totals restored");
+      assertEqual(state.profitHistory.length, 1, "history restored");
+      assertEqual(state.stats.totalCapitalGains, 4, "current gain restored");
+      assertEqual(state.stats.legacyCapitalGains, 5, "legacy gain restored");
+    });
+
+    await test("Migrasi v4 menyimpan snapshot capital gain lama dan menghapus counted", async () => {
+      await seedSave({
+        version: 4,
+        money: 500,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        stockProfitWithdrawn: { 0: 1000 },
+        stockProfitCounted: { 0: 600 },
+        stockProfitTotals: { 0: 1000 },
+        profitWallet: 1000,
+        stats: { totalCapitalGains: 400 },
+      });
+      const state = await getState();
+      assertEqual(state.version, 5, "migrated to v5");
+      assertEqual(state.stats.legacyCapitalGains, 400, "old total snapshotted");
+      assertEqual(state.stats.totalCapitalGains, 0, "current realized gain reset");
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "marker preserved");
+      assertEqual(state.stockProfitCounted, undefined, "counted removed");
+      assertEqual(state.stockProfitTotals["0"], 1000, "display total preserved");
+      assertEqual(state.profitWallet, 1000, "profit wallet preserved");
+      assertEqual(state.money, 500, "money preserved");
+      assertEqual(await readTotalIncome(), 0, "legacy snapshot excluded from Total Income");
+    });
+
+    await test("Migrasi v4 dengan marker valid tidak langsung menjual", async () => {
+      await seedSave({
+        version: 4,
+        money: 0,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        stockProfitWithdrawn: { 0: 1000 },
+        profitWallet: 1000,
+        stats: { totalCapitalGains: 500 },
+      });
+      let state = await getState();
+      assertEqual(state.assets.stocks["0"], 10, "shares not sold on migration");
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "marker preserved");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        0,
+        "no sale at same price",
+      );
+
+      await evalVoid("window.KONGLOGAME.sellStockAll(0);");
+      state = await getState();
+      assertEqual(state.money, 2000, "sale proceeds credited");
+      assertEqual(state.stats.totalCapitalGains, 1000, "raw realized gain counted");
+      assertEqual(state.stats.legacyCapitalGains, 500, "legacy snapshot preserved");
+      assertEqual(await readTotalIncome(), 1000, "Total Income counts current gain only");
+    });
+
+    await test("Migrasi v4 marker hilang memakai baseline unrealized", async () => {
+      await seedSave({
+        version: 4,
+        money: 0,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        stockProfitCounted: { 0: 600 },
+        stockProfitTotals: { 0: 1000 },
+        profitWallet: 1000,
+        stats: { totalCapitalGains: 1000 },
+      });
+      let state = await getState();
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "baseline at unrealized");
+      assertEqual(state.assets.stocks["0"], 10, "no immediate duplicate sale");
+      assertEqual(state.stats.totalCapitalGains, 0, "current gain reset");
+      assertEqual(state.stats.legacyCapitalGains, 1000, "legacy gain snapshotted");
+
+      const credited = await evaluate(
+        "window.KONGLOGAME.__test.setStockPrice(0, 250); window.KONGLOGAME.__test.runAutoWithdraw()",
+      );
+      assertEqual(credited, 500, "only profit above baseline sold");
+      state = await getState();
+      assertEqual(state.assets.stocks["0"], 8, "two shares sold");
+      assertEqual(state.stockCostBasis["0"], 800, "basis reduced");
+      assertEqual(state.stockProfitWithdrawn["0"], 1200, "marker adds removed basis");
+      assertEqual(state.stats.totalCapitalGains, 300, "realized gain after migration");
+      assertEqual(state.profitWallet, 1500, "profit wallet after migration sale");
+      assertEqual(state.stockProfitTotals["0"], 1300, "display total adds gain");
+    });
+
+    await test("Restore backup v4 memigrasikan marker dan snapshot statistik", async () => {
+      await resetState();
+      const legacy = legacyB3Save({
+        stockProfitCounted: { 0: 600 },
+        stockProfitTotals: { 0: 1000 },
+        stats: { totalCapitalGains: 1000 },
+      });
+      const result = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify(legacy)) +
+          ")",
+      );
+      assertEqual(result, null, "v4 backup restored");
+      const state = await getState();
+      assertEqual(state.version, 5, "v4 backup migrated to v5");
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "marker restored");
+      assertEqual(state.stockProfitCounted, undefined, "counted dropped");
+      assertEqual(state.profitWallet, 1000, "profit wallet restored");
+      assertEqual(state.stats.legacyCapitalGains, 1000, "legacy stats snapshotted");
+      assertEqual(state.stats.totalCapitalGains, 0, "current gain reset");
+      assertEqual(state.money, 0, "money restored");
+      assertEqual(await readTotalIncome(), 0, "legacy snapshot excluded");
+    });
+
+    await test("Migrasi v4 posisi partial sale sebelum upgrade", async () => {
+      await seedSave({
+        version: 4,
+        money: 1000,
+        assets: { stocks: { 0: 5 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 500 },
+        stockProfitWithdrawn: { 0: 500 },
+        stockProfitTotals: { 0: 500 },
+        profitWallet: 1000,
+        stats: { totalCapitalGains: 500 },
+      });
+      let state = await getState();
+      assertEqual(state.stockProfitWithdrawn["0"], 500, "remaining marker preserved");
+      assertEqual(state.stats.legacyCapitalGains, 500, "old realized gain snapshotted");
+      assertEqual(state.stats.totalCapitalGains, 0, "current gain reset");
+      assertEqual(state.assets.stocks["0"], 5, "remaining shares preserved");
+
+      await evalVoid("window.KONGLOGAME.sellStockAll(0);");
+      state = await getState();
+      assertEqual(state.stats.totalCapitalGains, 500, "remaining sale gain counted");
+      assertEqual(state.stats.legacyCapitalGains, 500, "legacy snapshot unchanged");
+      assertEqual(state.stockProfitTotals["0"], 500, "display total preserved");
+      assertEqual(await readTotalIncome(), 500, "current gain only in Total Income");
+      assertEqual(state.money, 2000, "remaining sale proceeds credited");
+    });
+
+    await test("Migrasi v4 posisi sudah terjual mempertahankan wallet dan snapshot", async () => {
+      await seedSave({
+        version: 4,
+        money: 0,
+        assets: {},
+        stockMarket: { prices: [], history: [] },
+        stockCostBasis: {},
+        stockProfitWithdrawn: {},
+        stockProfitTotals: { 0: 1000 },
+        profitWallet: 1000,
+        stats: { totalCapitalGains: 1000 },
+      });
+      const state = await getState();
+      assertEqual(state.stockProfitTotals["0"], 1000, "display total preserved");
+      assertEqual(state.profitWallet, 1000, "profit wallet preserved");
+      assertEqual(state.stats.legacyCapitalGains, 1000, "legacy gain snapshotted");
+      assertEqual(state.stats.totalCapitalGains, 0, "current gain reset");
+      assertEqual(await readTotalIncome(), 0, "legacy snapshot excluded");
+    });
+
+    await test("Migrasi v4 idempoten setelah reload", async () => {
+      await seedSave(legacyB3Save({ stats: { totalCapitalGains: 1000 } }));
+      let state = await getState();
+      assertEqual(state.stockProfitTotals["0"], 1000, "display total preserved");
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "marker preserved");
+      assertEqual(state.stats.legacyCapitalGains, 1000, "legacy snapshot");
+      assertEqual(state.stats.totalCapitalGains, 0, "current gain reset");
+      assertEqual(state.profitHistory.length, 0, "no synthetic history");
+      await reloadApp();
+      state = await getState();
+      assertEqual(state.stockProfitTotals["0"], 1000, "reload does not duplicate totals");
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "reload keeps marker");
+      assertEqual(state.stats.legacyCapitalGains, 1000, "reload keeps snapshot");
+      assertEqual(state.stats.totalCapitalGains, 0, "reload keeps current gain");
+      assertEqual(await readTotalIncome(), 0, "no legacy double count");
+    });
+
+    await test("Marker v3 tetap dipertahankan saat migrasi", async () => {
+      const rawSave = {
+        version: 3,
+        money: 0,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        stockProfitWithdrawn: { 0: 400 },
+        profitWallet: 400,
+        stats: { totalCapitalGains: 400 },
+      };
+      const migrated = await evaluate(
+        "window.KONGLOGAME.__test.migrateSave(" +
+          JSON.stringify(rawSave) +
+          ")",
+      );
+      assertEqual(migrated.version, 5, "v3 migrated to v5");
+      assertEqual(migrated.stockProfitWithdrawn["0"], 400, "v3 marker preserved");
+      assertEqual(migrated.profitWallet, 400, "v3 wallet preserved");
+      assertEqual(migrated.assets.stocks["0"], 10, "no sale during migration");
+
+      await seedSave(rawSave);
+      const state = await getState();
+      assertEqual(state.assets.stocks["0"], 7, "load sells only remaining profit");
+      assertEqual(state.stockCostBasis["0"], 700, "basis reduced");
+      assertEqual(state.stockProfitWithdrawn["0"], 700, "marker adds removed basis");
+      assertEqual(state.profitWallet, 1000, "proceeds credited");
+      assertEqual(state.stats.legacyCapitalGains, 400, "legacy gain snapshotted");
+      assertEqual(state.stats.totalCapitalGains, 300, "current gain counted");
+      assertEqual(await readTotalIncome(), 300, "current gain only in Total Income");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        0,
+        "no repeat sale after load",
+      );
+    });
+
+    await test("Marker eksplisit 0 pada save legacy tidak menjual saat migrasi", async () => {
+      const rawSave = {
+        version: 4,
+        money: 0,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        stockProfitWithdrawn: { 0: 0 },
+        profitWallet: 0,
+        stats: { totalCapitalGains: 0 },
+      };
+      const migrated = await evaluate(
+        "window.KONGLOGAME.__test.migrateSave(" +
+          JSON.stringify(rawSave) +
+          ")",
+      );
+      assertEqual(
+        migrated.stockProfitWithdrawn["0"],
+        undefined,
+        "explicit zero marker kept empty",
+      );
+      assertEqual(migrated.assets.stocks["0"], 10, "no migration sale");
+      assertEqual(migrated.profitWallet, 0, "wallet unchanged on migration");
+
+      await seedSave(rawSave);
+      const state = await getState();
+      assertEqual(state.assets.stocks["0"], 5, "load sells current profit");
+      assertEqual(state.stockProfitWithdrawn["0"], 500, "new marker recorded");
+      assertEqual(state.profitWallet, 1000, "proceeds credited");
+      assertEqual(state.stats.totalCapitalGains, 500, "realized gain counted");
+    });
+
+    await test("Marker lebih besar dari unrealized P/L tidak menjual saham", async () => {
+      await seedSave({
+        version: 4,
+        money: 0,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        stockProfitWithdrawn: { 0: 1200 },
+        profitWallet: 1200,
+        stats: { totalCapitalGains: 1200 },
+      });
+      let state = await getState();
+      assertEqual(state.stockProfitWithdrawn["0"], 1200, "high marker preserved");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        0,
+        "no sale below marker",
+      );
+
+      await evalVoid(
+        "window.KONGLOGAME.__test.setStockPrice(0, 250); window.KONGLOGAME.__test.runAutoWithdraw();",
+      );
+      state = await getState();
+      assertEqual(state.assets.stocks["0"], 9, "one share sold after price rise");
+      assertEqual(state.stockProfitWithdrawn["0"], 1300, "marker adds removed basis");
+      assertEqual(state.profitWallet, 1450, "proceeds credited");
+      assertEqual(state.stats.totalCapitalGains, 150, "gain above marker counted");
+    });
+
+    await test("Marker positif di bawah unrealized P/L menjual sisa profit", async () => {
+      const rawSave = {
+        version: 4,
+        money: 0,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        stockProfitWithdrawn: { 0: 400 },
+        stockProfitTotals: { 0: 400 },
+        profitWallet: 400,
+        stats: { totalCapitalGains: 400 },
+      };
+      const migrated = await evaluate(
+        "window.KONGLOGAME.__test.migrateSave(" +
+          JSON.stringify(rawSave) +
+          ")",
+      );
+      assertEqual(migrated.stockProfitWithdrawn["0"], 400, "positive marker preserved");
+      assertEqual(migrated.assets.stocks["0"], 10, "no sale during migration");
+
+      await seedSave(rawSave);
+      const state = await getState();
+      assertEqual(state.assets.stocks["0"], 7, "load sells eligible profit");
+      assertEqual(state.stockProfitWithdrawn["0"], 700, "marker adds removed basis");
+      assertEqual(state.profitWallet, 1000, "proceeds credited");
+      assertEqual(state.stockProfitTotals["0"], 700, "display total adds gain");
+      assertEqual(state.stats.totalCapitalGains, 300, "current gain counted");
+    });
+
+    await test("Migrasi basis hilang memakai harga pasar dan tidak auto-withdraw fiktif", async () => {
+      await seedSave({
+        version: 3,
+        money: 0,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [400], history: [[400]] },
+        stats: {},
+      });
+      let state = await getState();
+      assertEqual(state.version, 5, "save migrated to v5");
+      assertEqual(state.stockCostBasis["0"], 4000, "basis steps up to market value");
+      assertEqual(state.profitWallet, 0, "no fake auto-withdraw");
       assertEqual(
         state.stockProfitWithdrawn["0"],
         undefined,
-        "marker reset after full sale",
+        "no withdrawn marker",
       );
-      assertEqual(state.profitWallet, 1500, "profit wallet survives sale");
+      assertEqual(state.stockProfitTotals["0"], undefined, "no fake totals");
+      assertEqual(await readTotalIncome(), 0, "no fake total income");
+
+      await evalVoid("window.KONGLOGAME.sellStockAll(0);");
+      state = await getState();
+      assertEqual(state.stats.totalCapitalGains, 0, "sale has no fake gain");
+      assertEqual(state.money, 4000, "sale proceeds credited");
     });
 
-    await test("Profit Wallet dan marker bertahan setelah reload", async () => {
+    await test("Restore backup tanpa basis memakai harga pasar tanpa profit fiktif", async () => {
+      await resetState();
+      const backup = {
+        version: 3,
+        money: 100,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [300], history: [[300]] },
+        stats: {},
+        profitWallet: 0,
+      };
+      const result = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify(backup)) +
+          ")",
+      );
+      assertEqual(result, null, "backup without basis restored");
+      let state = await getState();
+      assertEqual(state.version, 5, "restore migrated to v5");
+      assertEqual(state.stockCostBasis["0"], 3000, "restored basis uses market");
+      assertEqual(state.profitWallet, 0, "restore did not credit profit");
+
+      const credited = await evaluate(
+        "window.KONGLOGAME.__test.runAutoWithdraw()",
+      );
+      assertEqual(credited, 0, "no fake auto-withdraw after restore");
+      state = await getState();
+      assertEqual(state.stockProfitTotals["0"], undefined, "no fake totals");
+      assertEqual(await readTotalIncome(), 0, "no fake total income");
+    });
+
+    await test("Sell-all lalu buy-back dimulai tanpa marker lama", async () => {
       await resetState();
       await evalVoid(
-        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.runAutoWithdraw(); window.KONGLOGAME.saveGame();",
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.runAutoWithdraw();",
       );
-      const before = await getState();
-      assertEqual(before.profitWallet, 1000, "wallet before reload");
-      assertEqual(before.stockProfitWithdrawn["0"], 1000, "marker before reload");
+      await evalVoid("window.KONGLOGAME.sellStockAll(0);");
+      let state = await getState();
+      assertEqual(state.stockProfitWithdrawn["0"], undefined, "marker cleared after sell-all");
+      assertEqual(state.stockProfitTotals["0"], 500, "auto display total kept");
+      assertEqual(state.stats.totalCapitalGains, 1000, "all economic gain realized");
+      assertEqual(state.money, 1000, "all sale proceeds credited");
 
+      await evalVoid(
+        "window.KONGLOGAME.__test.setMoney(2000); window.KONGLOGAME.buyAssetAll('stocks', 0);",
+      );
+      state = await getState();
+      assertEqual(state.assets.stocks["0"], 10, "rebought shares");
+      assertEqual(state.stockCostBasis["0"], 2000, "fresh basis");
+      assertEqual(state.stockProfitWithdrawn["0"], undefined, "new position has no marker");
+
+      await evalVoid(
+        "window.KONGLOGAME.__test.setStockPrice(0, 250); window.KONGLOGAME.__test.runAutoWithdraw();",
+      );
+      state = await getState();
+      assertEqual(state.assets.stocks["0"], 8, "new position partially sold");
+      assertEqual(state.stockProfitWithdrawn["0"], 400, "new marker starts from new basis");
+      assertEqual(state.stats.totalCapitalGains, 1100, "new realized gain accumulates");
+      assertEqual(state.profitWallet, 1500, "profit wallet adds new proceeds");
+      assertEqual(state.stockProfitTotals["0"], 600, "display total adds new gain");
+    });
+
+    await test("Auto withdraw tidak melewati kapasitas karena pembulatan saham", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 0 }, profitWallet: " +
+          (MAX_SAFE_MONEY - 275) +
+          " }); window.KONGLOGAME.__test.setStockPrice(0, 90);",
+      );
+      const credited = await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()");
+      assertEqual(credited, 270, "only whole shares within capacity");
+      const state = await getState();
+      assertEqual(state.assets.stocks["0"], 7, "three shares sold");
+      assert(
+        state.profitWallet <= MAX_SAFE_MONEY,
+        "profit wallet stays within cap",
+      );
+    });
+
+    await test("Auto Withdraw tidak menggandakan profit setelah reload", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, assets: { stocks: { 0: 10 } }, stockCostBasis: { 0: 1000 }, profitWallet: 0 }); window.KONGLOGAME.__test.setStockPrice(0, 200); window.KONGLOGAME.__test.runAutoWithdraw();",
+      );
       await reloadApp();
-      const after = await getState();
-      assertEqual(after.profitWallet, 1000, "wallet after reload");
-      assertEqual(after.stockProfitWithdrawn["0"], 1000, "marker after reload");
-      assertEqual(after.assets.stocks["0"], 10, "shares after reload");
-      assertEqual(after.stockCostBasis["0"], 1000, "basis after reload");
+      await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()");
+      const state = await getState();
+      assertEqual(state.profitWallet, 1000, "no duplicate after reload");
+      assertEqual(state.profitHistory.length, 1, "no duplicate history after reload");
+    });
+
+    await test("Profit History maksimal 5 entri", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, profitWallet: 0, assets: { stocks: { 0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 } }, stockCostBasis: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }, stockProfitWithdrawn: {} });",
+      );
+      await evalVoid(
+        "['0','1','2','3','4','5'].forEach((i) => window.KONGLOGAME.__test.setStockPrice(Number(i), 200)); window.KONGLOGAME.__test.runAutoWithdraw();",
+      );
+      const state = await getState();
+      assertEqual(state.profitHistory.length, 5, "history capped at five entries");
+      assertEqual(
+        Object.keys(state.stockProfitTotals).length,
+        6,
+        "all six stock totals retained",
+      );
+      assert(state.profitHistory.every((entry) => entry.amount > 0), "history has gains");
+    });
+
+    await test("Penghapusan entri lama tidak mengurangi total profit", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 0, profitWallet: 0, assets: { stocks: { 0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 } }, stockCostBasis: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }, stockProfitWithdrawn: {} });",
+      );
+      await evalVoid(
+        "['0','1','2','3','4','5'].forEach((i) => window.KONGLOGAME.__test.setStockPrice(Number(i), 200)); window.KONGLOGAME.__test.runAutoWithdraw();",
+      );
+      const state = await getState();
+      const historyTotal = state.profitHistory.reduce(
+        (total, entry) => total + entry.amount,
+        0,
+      );
+      const stockTotal = Object.values(state.stockProfitTotals).reduce(
+        (total, amount) => total + amount,
+        0,
+      );
+      assertEqual(state.profitHistory.length, 5, "history trimmed");
+      assertEqual(state.stockProfitTotals["0"], 200, "trimmed stock total kept");
+      assert(stockTotal > historyTotal, "totals exceed trimmed history");
+      assertClose(
+        state.stats.totalCapitalGains,
+        stockTotal,
+        0.0001,
+        "realized gain equals all stock totals",
+      );
+    });
+
+    await test("Withdraw All ketika Main Wallet hampir penuh", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: " + (MAX_SAFE_MONEY - 50) + ", profitWallet: 500 });",
+      );
+      await evalVoid(
+        "(() => { document.getElementById('profitWithdrawAmount').value = ''; document.getElementById('profitWithdrawAllBtn').click(); })()",
+      );
+      const state = await getState();
+      assertEqual(state.money, MAX_SAFE_MONEY, "money capped");
+      assertEqual(state.profitWallet, 450, "remaining kept in profit wallet");
     });
 
     await test("Save lama tanpa Profit Wallet dimigrasi tanpa menarik profit", async () => {
@@ -1375,6 +2052,7 @@ async function main() {
         stats: {},
       });
       const state = await getState();
+      assertEqual(state.version, 5, "old save migrated to v5");
       assertEqual(state.profitWallet, 0, "profit wallet defaults to zero");
       assertEqual(
         state.stockProfitWithdrawn["0"],
@@ -1383,6 +2061,108 @@ async function main() {
       );
       assertEqual(state.stockCostBasis["0"], 10000, "old basis preserved");
       assertEqual(state.money, 500, "old money preserved");
+    });
+
+    await test("Local save v5 tanpa profitWallet tidak menimpa save lama", async () => {
+      const invalidSave = {
+        version: 5,
+        money: 777,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        stockProfitWithdrawn: { 0: 500 },
+        stockProfitTotals: { 0: 500 },
+        stats: { totalCapitalGains: 500 },
+      };
+      await seedSave(invalidSave);
+
+      const saved = await getSaved();
+      assertEqual(saved.money, 777, "old money remains in local storage");
+      assertEqual(saved.assets.stocks["0"], 10, "old shares remain in local storage");
+      assertEqual(saved.profitWallet, undefined, "invalid wallet is not synthesized");
+
+      let state = await getState();
+      assertEqual(state.assets.stocks["0"], undefined, "invalid save not loaded");
+      assertEqual(state.profitWallet, 0, "active fallback has default wallet");
+
+      await evalVoid(
+        "window.__backupCapture = null; window.Capacitor = { isNativePlatform: () => true, Plugins: { SaveBackup: { saveToDownloads: async ({ data }) => { window.__backupCapture = data; return {}; } } } }; document.getElementById('backupBtn').click();",
+      );
+      await sleep(150);
+      const blockedBackup = await evaluate("window.__backupCapture");
+      await evalVoid("delete window.Capacitor; delete window.__backupCapture;");
+      assertEqual(blockedBackup, null, "backup is blocked while local save is invalid");
+      const blockedToast = await readLastToast();
+      assert(
+        blockedToast && blockedToast.text.includes("Backup tidak dibuat"),
+        "blocked backup explains why",
+      );
+
+      const restored = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(
+            JSON.stringify({
+              version: 5,
+              money: 1234,
+              assets: {},
+              stockMarket: { prices: [], history: [] },
+              stockCostBasis: {},
+              stockProfitWithdrawn: {},
+              profitWallet: 4321,
+              stats: {},
+            }),
+          ) +
+          ")",
+      );
+      assertEqual(restored, null, "valid restore unlocks saving");
+      state = await getState();
+      assertEqual(state.money, 1234, "restored money active");
+      assertEqual(state.profitWallet, 4321, "restored wallet active");
+      const savedAfterRestore = await getSaved();
+      assertEqual(savedAfterRestore.money, 1234, "restored money persisted");
+      assertEqual(savedAfterRestore.profitWallet, 4321, "restored wallet persisted");
+    });
+
+    await test("Local save v2/v3/v4 valid tetap dimigrasikan", async () => {
+      const cases = [
+        {
+          version: 2,
+          money: 201,
+          assets: { business: { 0: 1 } },
+          stockMarket: { prices: [], history: [] },
+          stats: {},
+        },
+        {
+          version: 3,
+          money: 302,
+          assets: { stocks: { 0: 2 } },
+          stockMarket: { prices: [200], history: [[200]] },
+          stockCostBasis: { 0: 100 },
+          stats: {},
+        },
+        {
+          version: 4,
+          money: 403,
+          assets: { stocks: { 0: 2 } },
+          stockMarket: { prices: [200], history: [[200]] },
+          stockCostBasis: { 0: 10000 },
+          stockProfitWithdrawn: { 0: 50 },
+          profitWallet: 77,
+          stats: { totalCapitalGains: 50 },
+        },
+      ];
+
+      for (const localSave of cases) {
+        await seedSave(localSave);
+        const state = await getState();
+        assertEqual(state.version, 5, "v" + localSave.version + " migrated");
+        assertEqual(state.money, localSave.money, "v" + localSave.version + " money preserved");
+        assertEqual(
+          state.profitWallet,
+          localSave.version >= 4 ? 77 : 0,
+          "v" + localSave.version + " wallet handled",
+        );
+      }
     });
 
     await test("Income, dividen, dan bunga tidak overflow di batas maksimum", async () => {
@@ -1544,7 +2324,7 @@ async function main() {
       assert(captured, "backup captured");
       assertEqual(captured.fileName, "filesave.json", "backup file name");
       const parsed = JSON.parse(captured.data);
-      assertEqual(parsed.version, 3, "backup version");
+      assertEqual(parsed.version, 5, "backup version");
       assertEqual(parsed.money, 4321, "backup money");
       assertEqual(parsed.assets.business["0"], 3, "backup business level");
       assertEqual(parsed.assets.stocks["2"], 5, "backup shares");
@@ -1692,7 +2472,208 @@ async function main() {
       assertEqual(saved.money, 456, "saved progress unchanged after rejected backups");
     });
 
-    await test("Restore menerima save lama v2 dan memigrasikan ke v3", async () => {
+    await test("Restore menolak profitWallet tidak valid tanpa mengubah progres", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 456, profitWallet: 321, assets: { stocks: {} } }); window.KONGLOGAME.saveGame();",
+      );
+      const base = {
+        version: 3,
+        money: 999,
+        assets: {},
+        stockMarket: { prices: [], history: [] },
+        stats: {},
+        profitWallet: 0,
+      };
+      const invalidWallet = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(
+            JSON.stringify({ ...base, profitWallet: "abc" }),
+          ) +
+          ")",
+      );
+      assert(
+        invalidWallet && invalidWallet.includes("profitWallet"),
+        "non-numeric profitWallet rejected",
+      );
+      const negativeWallet = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(
+            JSON.stringify({ ...base, profitWallet: -1 }),
+          ) +
+          ")",
+      );
+      assert(
+        negativeWallet && negativeWallet.includes("profitWallet"),
+        "negative profitWallet rejected",
+      );
+      const missingV4Wallet = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(
+            JSON.stringify({
+              version: 4,
+              money: 999,
+              assets: {},
+              stockMarket: { prices: [], history: [] },
+              stats: {},
+            }),
+          ) +
+          ")",
+      );
+      assert(
+        missingV4Wallet && missingV4Wallet.includes("profitWallet"),
+        "v4 backup without profitWallet rejected",
+      );
+      const missingV5Wallet = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(
+            JSON.stringify({
+              version: 5,
+              money: 999,
+              assets: {},
+              stockMarket: { prices: [], history: [] },
+              stats: {},
+            }),
+          ) +
+          ")",
+      );
+      assert(
+        missingV5Wallet && missingV5Wallet.includes("profitWallet"),
+        "v5 backup without profitWallet rejected",
+      );
+
+      const state = await getState();
+      assertEqual(state.money, 456, "progress money unchanged");
+      assertEqual(state.profitWallet, 321, "progress profit wallet unchanged");
+      const saved = await getSaved();
+      assertEqual(saved.money, 456, "saved money unchanged");
+      assertEqual(saved.profitWallet, 321, "saved profit wallet unchanged");
+    });
+
+    await test("Restore backup v5 tanpa stockProfitWithdrawn memakai baseline", async () => {
+      await resetState();
+      const backup = {
+        version: 5,
+        money: 250,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        profitWallet: 500,
+        stats: {},
+      };
+      const result = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify(backup)) +
+          ")",
+      );
+      assertEqual(result, null, "v5 backup without marker accepted");
+      let state = await getState();
+      assertEqual(state.stockProfitWithdrawn["0"], 1000, "marker baselined at unrealized");
+      assertEqual(state.assets.stocks["0"], 10, "restore does not sell shares");
+      assertEqual(state.money, 250, "money restored");
+      assertEqual(state.profitWallet, 500, "wallet restored");
+      assertEqual(state.profitHistory.length, 0, "no synthetic history");
+      assertEqual(
+        await evaluate("window.KONGLOGAME.__test.runAutoWithdraw()"),
+        0,
+        "no auto sale at baseline price",
+      );
+
+      await evalVoid(
+        "window.KONGLOGAME.__test.setStockPrice(0, 250); window.KONGLOGAME.__test.runAutoWithdraw();",
+      );
+      state = await getState();
+      assertEqual(state.assets.stocks["0"], 8, "only profit above baseline sold");
+      assertEqual(state.stockProfitWithdrawn["0"], 1200, "marker adds removed basis");
+      assertEqual(state.profitWallet, 1000, "proceeds credited once");
+      assertEqual(state.stats.totalCapitalGains, 300, "realized gain counted");
+    });
+
+    await test("Backup v5 tanpa profitWallet ditolak sebelum state berubah", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 456, profitWallet: 321, assets: { stocks: { 0: 4 } }, stockCostBasis: { 0: 400 } }); window.KONGLOGAME.saveGame();",
+      );
+      const invalid = {
+        version: 5,
+        money: 999,
+        assets: { stocks: { 0: 10 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1000 },
+        stockProfitWithdrawn: { 0: 0 },
+        stats: {},
+      };
+      const error = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify(invalid)) +
+          ")",
+      );
+      assert(error && error.includes("profitWallet"), "missing v5 wallet rejected");
+      const state = await getState();
+      assertEqual(state.money, 456, "money unchanged");
+      assertEqual(state.profitWallet, 321, "profit wallet unchanged");
+      assertEqual(state.assets.stocks["0"], 4, "assets unchanged");
+      const saved = await getSaved();
+      assertEqual(saved.money, 456, "saved money unchanged");
+      assertEqual(saved.profitWallet, 321, "saved profit wallet unchanged");
+    });
+
+    await test("Restore backup invalid tidak mengubah state aktif", async () => {
+      await resetState();
+      await evalVoid(
+        "window.KONGLOGAME.__test.setState({ money: 789, profitWallet: 123, assets: { stocks: { 0: 6 } }, stockCostBasis: { 0: 600 } }); window.KONGLOGAME.saveGame();",
+      );
+      const invalid = {
+        version: 5,
+        money: 1,
+        assets: { stocks: { 0: 99 } },
+        stockMarket: { prices: [200], history: [[200]] },
+        stockCostBasis: { 0: 1 },
+        stockProfitWithdrawn: [],
+        profitWallet: 0,
+        stats: {},
+      };
+      const error = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify(invalid)) +
+          ")",
+      );
+      assert(
+        error && error.includes("stockProfitWithdrawn"),
+        "invalid marker structure rejected",
+      );
+      const state = await getState();
+      assertEqual(state.money, 789, "active money unchanged");
+      assertEqual(state.profitWallet, 123, "active wallet unchanged");
+      assertEqual(state.assets.stocks["0"], 6, "active shares unchanged");
+      assertEqual(state.stockCostBasis["0"], 600, "active basis unchanged");
+      const saved = await getSaved();
+      assertEqual(saved.money, 789, "saved money unchanged");
+      assertEqual(saved.assets.stocks["0"], 6, "saved shares unchanged");
+    });
+
+    await test("Restore menerima backup v3 tanpa profitWallet", async () => {
+      await resetState();
+      const legacy = {
+        version: 3,
+        money: 777,
+        assets: {},
+        stockMarket: { prices: [], history: [] },
+        stats: {},
+      };
+      const result = await evaluate(
+        "window.KONGLOGAME.__test.restoreBackupText(" +
+          JSON.stringify(JSON.stringify(legacy)) +
+          ")",
+      );
+      assertEqual(result, null, "v3 backup without wallet accepted");
+      const state = await getState();
+      assertEqual(state.version, 5, "v3 backup migrated to v5");
+      assertEqual(state.money, 777, "money restored");
+      assertEqual(state.profitWallet, 0, "missing profit wallet defaults to zero");
+    });
+
+    await test("Restore menerima save lama v2 dan memigrasikan ke v5", async () => {
       await resetState();
       const legacy = {
         version: 2,
@@ -1708,7 +2689,7 @@ async function main() {
       );
       assertEqual(result, null, "legacy restore result");
       const state = await getState();
-      assertEqual(state.version, 3, "legacy save migrated to v3");
+      assertEqual(state.version, 5, "legacy save migrated to v5");
       assertEqual(state.money, 1234, "legacy money restored");
       assertEqual(state.assets.business["0"], 2, "legacy business restored");
       assertEqual(state.assets.industry["0"], 1, "legacy industry restored");
@@ -2045,7 +3026,7 @@ async function main() {
         stats: {},
       });
       const state = await getState();
-      assertEqual(state.version, 3, "legacy save migrated");
+      assertEqual(state.version, 5, "legacy save migrated");
       assertEqual(state.money, 4321, "legacy money preserved");
       assert(state.offline, "offline state created");
       assert(Number.isFinite(state.offline.lastSeenAt), "last seen initialized");

@@ -8,9 +8,10 @@ const SAVE_KEY = "investmentEmpireSave";
 const BACKUP_FILE_NAME = "filesave.json";
 const BACKUP_FOLDER = "Download/KONGLOGAME-save";
 const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 5;
 const MAX_SAFE_MONEY = 1e15;
 const MAX_QUANTITY = 1e9;
+const PROFIT_HISTORY_LIMIT = 5;
 
 const ECONOMY_CONFIG = {
   currency: {
@@ -857,6 +858,8 @@ function createDefaultState(now = nowMs()) {
     },
     stockCostBasis: {},
     stockProfitWithdrawn: {},
+    stockProfitTotals: {},
+    profitHistory: [],
     timers: createDefaultTimers(now),
     offline: {
       lastSeenAt: now,
@@ -868,12 +871,14 @@ function createDefaultState(now = nowMs()) {
       totalStockIncome: 0,
       totalBusinessIncome: 0,
       totalCapitalGains: 0,
+      legacyCapitalGains: 0,
     },
   };
 }
 
 let gameState = createDefaultState();
 let isResetting = false;
+let isLocalSaveBlocked = false;
 
 function getMiningLevelConfig() {
   const levels = ECONOMY_CONFIG.mining.levels;
@@ -1067,7 +1072,7 @@ function settleOfflineIncome(now = nowMs()) {
   if (income.gross > 0) {
     offline.pendingGross = safeMoney(offline.pendingGross + income.gross);
   }
-  runAutoWithdraw();
+  runAutoWithdraw(false);
   return income;
 }
 
@@ -1214,7 +1219,40 @@ function getStockPortfolio() {
   };
 }
 
-function runAutoWithdraw() {
+function addStockProfit(index, amount) {
+  const value = safeNumber(amount, 0);
+  if (!(value > 0)) return;
+
+  gameState.stockProfitTotals[index] = Math.min(
+    MAX_SAFE_MONEY,
+    safeNumber(gameState.stockProfitTotals[index], 0) + value,
+  );
+}
+
+function recordProfitHistory(index, amount, at = nowMs()) {
+  const stock = assetData.stocks[index];
+  if (!stock || !(amount > 0)) return;
+
+  if (!Array.isArray(gameState.profitHistory)) {
+    gameState.profitHistory = [];
+  }
+
+  gameState.profitHistory.push({
+    ticker: stock.ticker,
+    name: stock.name,
+    amount: Math.min(amount, MAX_SAFE_MONEY),
+    at,
+  });
+
+  if (gameState.profitHistory.length > PROFIT_HISTORY_LIMIT) {
+    gameState.profitHistory.splice(
+      0,
+      gameState.profitHistory.length - PROFIT_HISTORY_LIMIT,
+    );
+  }
+}
+
+function runAutoWithdraw(persist = true) {
   let credited = 0;
 
   assetData.stocks.forEach((stock, index) => {
@@ -1224,24 +1262,72 @@ function runAutoWithdraw() {
       return;
     }
 
-    const basis = safeNumber(gameState.stockCostBasis[index], 0);
-    const pnl = shares * getStockPrice(index) - basis;
-    const withdrawn = safeNumber(gameState.stockProfitWithdrawn[index], 0);
-    const profit = pnl - withdrawn;
-    if (profit <= 0) return;
+    const price = getStockPrice(index);
+    if (!(price > 0) || !Number.isFinite(price)) return;
 
-    const amount = Math.min(profit, getRemainingCapacity(gameState.profitWallet));
-    if (amount <= 0) return;
-
-    addWallet("profitWallet", amount);
-    gameState.stockProfitWithdrawn[index] = Math.min(
-      MAX_SAFE_MONEY,
-      withdrawn + amount,
+    const basis = Math.max(0, safeNumber(gameState.stockCostBasis[index], 0));
+    const unrealized = shares * price - basis;
+    const withdrawn = Math.max(
+      0,
+      safeNumber(gameState.stockProfitWithdrawn[index], 0),
     );
-    credited += amount;
+    const eligible = Math.max(0, unrealized - withdrawn);
+    if (eligible <= 0) return;
+
+    const capacity = getRemainingCapacity(gameState.profitWallet);
+    if (capacity <= 0) return;
+
+    const target = Math.min(eligible, capacity);
+    let quantity = Math.min(shares, Math.floor(target / price));
+    while (
+      quantity > 0 &&
+      (price * quantity > target || price * quantity > capacity)
+    ) {
+      quantity -= 1;
+    }
+    if (quantity <= 0) return;
+
+    const proceeds = price * quantity;
+    if (
+      !Number.isFinite(proceeds) ||
+      proceeds > capacity ||
+      proceeds > MAX_SAFE_MONEY
+    ) {
+      return;
+    }
+
+    const removedBasis =
+      quantity === shares ? basis : Math.min(basis, (basis * quantity) / shares);
+    const realizedGain = proceeds - removedBasis;
+    const remaining = shares - quantity;
+
+    addWallet("profitWallet", proceeds);
+    if (remaining <= 0) {
+      delete gameState.assets.stocks[index];
+      delete gameState.stockCostBasis[index];
+      delete gameState.stockProfitWithdrawn[index];
+    } else {
+      gameState.assets.stocks[index] = remaining;
+      gameState.stockCostBasis[index] = Math.max(0, basis - removedBasis);
+      gameState.stockProfitWithdrawn[index] = Math.min(
+        MAX_SAFE_MONEY,
+        withdrawn + removedBasis,
+      );
+    }
+    addStat("totalCapitalGains", realizedGain);
+    addStockProfit(index, realizedGain);
+    recordProfitHistory(index, realizedGain);
+    credited += proceeds;
   });
 
-  if (credited > 0) updatePortfolioSummary();
+  if (credited > 0) {
+    updateStockUI();
+    updateDashboardUI();
+    if (persist) {
+      saveGame();
+      gameState.timers.savedAt = nowMs();
+    }
+  }
   return credited;
 }
 
@@ -1631,6 +1717,18 @@ function updatePortfolioSummary() {
     "profitWallet",
     formatUsd(gameState.profitWallet, { compact: true }),
   );
+  setText(
+    "profitWithdrawSource",
+    formatUsd(gameState.profitWallet, { compact: true }),
+  );
+  setText(
+    "profitWithdrawTarget",
+    formatUsd(gameState.money, { compact: true }),
+  );
+  const withdrawBtn = getElement("profitWithdrawBtn");
+  if (withdrawBtn) withdrawBtn.disabled = gameState.profitWallet <= 0;
+  const withdrawAllBtn = getElement("profitWithdrawAllBtn");
+  if (withdrawAllBtn) withdrawAllBtn.disabled = gameState.profitWallet <= 0;
   setText("portfolioDividend", formatUsd(dividend));
 }
 
@@ -1803,6 +1901,36 @@ function updateStatsDrawerUI() {
     }),
   );
   setSignedClass(getElement("statsCapitalGains"), gameState.stats.totalCapitalGains);
+
+  const stockUnrealized = getStockPortfolio().pnl;
+  setText(
+    "statsStockUnrealized",
+    formatUsd(stockUnrealized, {
+      signed: true,
+      compact: Math.abs(stockUnrealized) >= 1000000,
+    }),
+  );
+  setSignedClass(getElement("statsStockUnrealized"), stockUnrealized);
+
+  // Savings stats are stored in IDR; total income is shown in USD.
+  const totalIncome = clamp(
+    safeNumber(gameState.stats.totalSavingsInterest, 0) /
+      ECONOMY_CONFIG.currency.usdToIdr +
+      safeNumber(gameState.stats.totalStockIncome, 0) +
+      safeNumber(gameState.stats.totalBusinessIncome, 0) +
+      safeNumber(gameState.stats.totalCapitalGains, 0),
+    -MAX_SAFE_MONEY,
+    MAX_SAFE_MONEY,
+  );
+  setText(
+    "statsTotalIncome",
+    formatUsd(totalIncome, {
+      signed: totalIncome > 0,
+      compact: Math.abs(totalIncome) >= 1000000,
+    }),
+  );
+  setSignedClass(getElement("statsTotalIncome"), totalIncome);
+
   setText(
     "statsSavingsBalance",
     formatIdr(gameState.savingsAccount, { compact: true }),
@@ -1810,13 +1938,84 @@ function updateStatsDrawerUI() {
   setText("statsRupiah", formatIdr(gameState.rupiahWallet, { compact: true }));
   setText("statsStockWallet", formatUsd(gameState.stockDividends));
   setText("statsBusinessWallet", formatUsd(gameState.businessIncome));
+  setText("statsProfitWallet", formatUsd(gameState.profitWallet));
   setText("statsMiningRate", formatUsdRate(getMiningRate()));
   setText("statsIncomeRate", formatUsdRate(getCurrentIncome()));
   setText(
     "statsPortfolioValue",
     formatUsd(getStockPortfolio().value, { compact: true }),
   );
+
+  renderStockProfitTotals();
+  renderProfitHistory();
   updateOfflineUI();
+}
+
+function renderStockProfitTotals() {
+  const container = getElement("stockProfitTotals");
+  if (!container) return;
+
+  if (!gameState.stockProfitTotals || typeof gameState.stockProfitTotals !== "object") {
+    gameState.stockProfitTotals = {};
+  }
+
+  const entries = [];
+  assetData.stocks.forEach((stock, index) => {
+    const total = safeNumber(gameState.stockProfitTotals[index], 0);
+    if (total > 0) entries.push({ stock, index, total });
+  });
+
+  entries.sort((a, b) => b.total - a.total);
+
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="empty-state">Belum ada profit yang di-withdraw otomatis.</div>';
+    return;
+  }
+
+  container.innerHTML = entries
+    .map(
+      (entry) =>
+        '<div><span>' +
+        escapeHtml(entry.stock.ticker) +
+        " - " +
+        escapeHtml(entry.stock.name) +
+        "</span><strong>" +
+        formatUsd(entry.total, { signed: true }) +
+        "</strong></div>",
+    )
+    .join("");
+}
+
+function renderProfitHistory() {
+  const container = getElement("profitHistoryList");
+  if (!container) return;
+
+  if (!Array.isArray(gameState.profitHistory)) {
+    gameState.profitHistory = [];
+  }
+
+  if (gameState.profitHistory.length === 0) {
+    container.innerHTML = '<div class="empty-state">Belum ada riwayat profit.</div>';
+    return;
+  }
+
+  container.innerHTML = gameState.profitHistory
+    .slice()
+    .reverse()
+    .map((entry) => {
+      const time = entry.at ? formatWibTime(entry.at) : "-";
+      const label = entry.ticker ? entry.ticker + " - " + (entry.name || "") : (entry.name || "-");
+      return (
+        '<div><div><span>' +
+        escapeHtml(label) +
+        '</span><span class="history-time">' +
+        escapeHtml(time) +
+        '</span></div><strong>' +
+        formatUsd(entry.amount, { signed: true }) +
+        "</strong></div>"
+      );
+    })
+    .join("");
 }
 
 function updateOfflineUI() {
@@ -2099,6 +2298,10 @@ function sellStock(index, quantity) {
   const removedBasis =
     parsedQuantity === owned ? basis : averageBasis * parsedQuantity;
   const realizedGain = proceeds - removedBasis;
+  const withdrawn = Math.min(
+    MAX_SAFE_MONEY,
+    Math.max(0, safeNumber(gameState.stockProfitWithdrawn[index], 0)),
+  );
 
   const remaining = owned - parsedQuantity;
   gameState.money = safeMoney(gameState.money + proceeds);
@@ -2109,7 +2312,6 @@ function sellStock(index, quantity) {
     delete gameState.stockProfitWithdrawn[index];
   } else {
     gameState.stockCostBasis[index] = Math.max(0, basis - removedBasis);
-    const withdrawn = safeNumber(gameState.stockProfitWithdrawn[index], 0);
     if (withdrawn > 0) {
       gameState.stockProfitWithdrawn[index] = Math.min(
         MAX_SAFE_MONEY,
@@ -2341,6 +2543,85 @@ function transferSavingsToRupiah() {
   );
 }
 
+function parseWithdrawAmount(value) {
+  const text = String(value == null ? "" : value).trim();
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(text)) return NaN;
+  const amount = Number(text);
+  return Number.isFinite(amount) && amount > 0 ? amount : NaN;
+}
+
+function transferProfitToMain(amount, input, extraMessage = "") {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    showToast("Masukkan jumlah withdraw yang valid.", "error");
+    return false;
+  }
+  if (amount > gameState.profitWallet) {
+    showToast("Saldo Profit Wallet tidak cukup.", "error");
+    return false;
+  }
+  if (amount > getRemainingCapacity(gameState.money)) {
+    showToast("Saldo utama penuh. Withdraw ditolak.", "error");
+    return false;
+  }
+
+  const beforeProfit = gameState.profitWallet;
+  const beforeMain = gameState.money;
+  gameState.profitWallet = safeMoney(gameState.profitWallet - amount);
+  addMoney(amount);
+  if (input) input.value = "";
+  updateDashboardUI();
+  updatePortfolioSummary();
+  saveGame();
+  showToast(
+    "Withdraw " +
+      formatUsd(amount) +
+      ". Profit Wallet " +
+      formatUsd(beforeProfit) +
+      " -> " +
+      formatUsd(gameState.profitWallet) +
+      ", saldo utama " +
+      formatUsd(beforeMain) +
+      " -> " +
+      formatUsd(gameState.money) +
+      "." +
+      extraMessage,
+    "success",
+  );
+  return true;
+}
+
+function withdrawProfitWallet() {
+  const input = getElement("profitWithdrawAmount");
+  const amount = parseWithdrawAmount(input ? input.value : "");
+  return transferProfitToMain(amount, input);
+}
+
+function withdrawAllProfitWallet() {
+  const total = gameState.profitWallet;
+  if (!(total > 0)) {
+    showToast("Saldo Profit Wallet kosong.", "error");
+    return false;
+  }
+  const capacity = getRemainingCapacity(gameState.money);
+  if (capacity <= 0) {
+    showToast("Saldo utama penuh. Withdraw ditolak.", "error");
+    return false;
+  }
+
+  const amount = Math.min(total, capacity);
+  const extraMessage =
+    amount < total
+      ? " Sisa " +
+        formatUsd(total - amount) +
+        " tetap di Profit Wallet karena kapasitas saldo utama."
+      : "";
+  return transferProfitToMain(
+    amount,
+    getElement("profitWithdrawAmount"),
+    extraMessage,
+  );
+}
+
 function updateStockPrices(now = nowMs()) {
   const config = ECONOMY_CONFIG.stocks;
 
@@ -2373,6 +2654,7 @@ function updateStockPrices(now = nowMs()) {
   gameState.stockMarket.lastUpdatedAt = now;
   runAutoWithdraw();
   updateStockUI();
+  updateDashboardUI();
 }
 
 function payStockDividends(now = nowMs()) {
@@ -2700,46 +2982,114 @@ function migrateSave(rawSave) {
   state.offline = normalizeOffline(rawSave.offline, now);
 
   const rawStats = rawSave.stats && typeof rawSave.stats === "object" ? rawSave.stats : {};
+  const rawVersion = Number(rawSave.version);
+  const isLegacy = !Number.isFinite(rawVersion) || rawVersion < SCHEMA_VERSION;
   state.stats.totalSavingsInterest = normalizeNumber(rawStats.totalSavingsInterest, 0);
   state.stats.totalStockIncome = normalizeNumber(rawStats.totalStockIncome, 0);
   state.stats.totalBusinessIncome = normalizeNumber(rawStats.totalBusinessIncome, 0);
-  state.stats.totalCapitalGains = normalizeNumber(
-    rawStats.totalCapitalGains,
-    0,
-    -MAX_SAFE_MONEY,
-    MAX_SAFE_MONEY,
-  );
+  if (isLegacy) {
+    state.stats.legacyCapitalGains = normalizeNumber(
+      rawStats.totalCapitalGains,
+      0,
+      -MAX_SAFE_MONEY,
+      MAX_SAFE_MONEY,
+    );
+  } else {
+    state.stats.totalCapitalGains = normalizeNumber(
+      rawStats.totalCapitalGains,
+      0,
+      -MAX_SAFE_MONEY,
+      MAX_SAFE_MONEY,
+    );
+    state.stats.legacyCapitalGains = normalizeNumber(
+      rawStats.legacyCapitalGains,
+      0,
+      -MAX_SAFE_MONEY,
+      MAX_SAFE_MONEY,
+    );
+  }
 
   const rawBasis =
     rawSave.stockCostBasis && typeof rawSave.stockCostBasis === "object"
       ? rawSave.stockCostBasis
       : {};
-  const rawWithdrawn =
+  const hasWithdrawnMap =
     rawSave.stockProfitWithdrawn &&
-    typeof rawSave.stockProfitWithdrawn === "object"
-      ? rawSave.stockProfitWithdrawn
+    typeof rawSave.stockProfitWithdrawn === "object" &&
+    !Array.isArray(rawSave.stockProfitWithdrawn);
+  const rawWithdrawn = hasWithdrawnMap ? rawSave.stockProfitWithdrawn : {};
+  const rawProfitTotals =
+    rawSave.stockProfitTotals && typeof rawSave.stockProfitTotals === "object"
+      ? rawSave.stockProfitTotals
       : {};
+  Object.keys(rawProfitTotals).forEach((key) => {
+    const index = Number(key);
+    if (!Number.isInteger(index) || !assetData.stocks[index]) return;
+    const total = normalizeNumber(rawProfitTotals[key], 0);
+    if (total > 0) {
+      state.stockProfitTotals[index] = Math.min(total, MAX_SAFE_MONEY);
+    }
+  });
+
+  const rawHistory = Array.isArray(rawSave.profitHistory)
+    ? rawSave.profitHistory
+    : [];
+  rawHistory.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const amount = normalizeNumber(entry.amount, 0);
+    const at = Number(entry.at);
+    if (!(amount > 0) || !Number.isFinite(at)) return;
+    state.profitHistory.push({
+      ticker: typeof entry.ticker === "string" ? entry.ticker : "",
+      name: typeof entry.name === "string" ? entry.name : "",
+      amount: Math.min(amount, MAX_SAFE_MONEY),
+      at,
+    });
+  });
+  state.profitHistory = state.profitHistory.slice(-PROFIT_HISTORY_LIMIT);
 
   assetData.stocks.forEach((stock, index) => {
     const shares = getOwnedFromAssets(state.assets, "stocks", index);
     if (shares <= 0) return;
 
+    const marketPrice = state.stockMarket.prices[index];
+    const fallbackPrice =
+      Number.isFinite(marketPrice) && marketPrice > 0
+        ? marketPrice
+        : stock.price;
     const savedBasis = rawBasis[index];
     if (Number.isFinite(savedBasis) && savedBasis >= 0) {
       state.stockCostBasis[index] = Math.min(savedBasis, MAX_SAFE_MONEY);
     } else {
+      // Step up a missing basis to current value so migration cannot create fake profit.
       state.stockCostBasis[index] = Math.min(
-        shares * stock.price,
+        shares * fallbackPrice,
         MAX_SAFE_MONEY,
       );
     }
 
     const savedWithdrawn = rawWithdrawn[index];
-    if (Number.isFinite(savedWithdrawn) && savedWithdrawn > 0) {
-      state.stockProfitWithdrawn[index] = Math.min(
-        savedWithdrawn,
-        MAX_SAFE_MONEY,
-      );
+    const hasSavedWithdrawn =
+      Object.prototype.hasOwnProperty.call(rawWithdrawn, index) &&
+      Number.isFinite(savedWithdrawn) &&
+      savedWithdrawn >= 0;
+    if (hasSavedWithdrawn) {
+      if (savedWithdrawn > 0) {
+        state.stockProfitWithdrawn[index] = Math.min(
+          savedWithdrawn,
+          MAX_SAFE_MONEY,
+        );
+      }
+    } else if (isLegacy || !hasWithdrawnMap) {
+      // Baseline missing markers so restore/migration never sells shares retroactively.
+      const unrealized =
+        shares * fallbackPrice - state.stockCostBasis[index];
+      if (unrealized > 0) {
+        state.stockProfitWithdrawn[index] = Math.min(
+          unrealized,
+          MAX_SAFE_MONEY,
+        );
+      }
     }
   });
 
@@ -2752,21 +3102,74 @@ function getOwnedFromAssets(assets, category, index) {
   return safeQuantity(holdings[index]) || 0;
 }
 
+function validateLocalSave(save) {
+  if (!isPlainObject(save)) {
+    return "Struktur save lokal tidak valid.";
+  }
+
+  let saveVersion = null;
+  if (save.version !== undefined && save.version !== null) {
+    if (!isNumericValue(save.version)) {
+      return "Versi save lokal tidak valid.";
+    }
+    const version = Number(save.version);
+    if (!Number.isInteger(version) || version < 1) {
+      return "Versi save lokal tidak valid.";
+    }
+    if (version > SCHEMA_VERSION) {
+      return "Save lokal dari versi aplikasi yang lebih baru.";
+    }
+    saveVersion = version;
+  }
+
+  if (
+    save.profitWallet !== undefined &&
+    save.profitWallet !== null
+  ) {
+    const wallet = Number(save.profitWallet);
+    if (
+      !isNumericValue(save.profitWallet) ||
+      wallet < 0 ||
+      wallet > MAX_SAFE_MONEY
+    ) {
+      return "Struktur save lokal tidak valid (profitWallet).";
+    }
+  } else if (saveVersion !== null && saveVersion >= 4) {
+    return "Save lokal v4/v5 tidak lengkap (profitWallet).";
+  }
+
+  return null;
+}
+
 function loadGame() {
   if (typeof localStorage === "undefined") return;
 
+  isLocalSaveBlocked = false;
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw);
+    const validationError = validateLocalSave(parsed);
+    if (validationError) {
+      isLocalSaveBlocked = true;
+      console.warn("KONGLOGAME: " + validationError);
+      return;
+    }
     gameState = migrateSave(parsed);
   } catch (error) {
+    isLocalSaveBlocked = true;
     console.warn("KONGLOGAME: save tidak bisa dibaca.", error);
   }
 }
 
 function saveGame() {
-  if (isResetting || typeof localStorage === "undefined") return;
+  if (
+    isResetting ||
+    isLocalSaveBlocked ||
+    typeof localStorage === "undefined"
+  ) {
+    return;
+  }
 
   try {
     gameState.version = SCHEMA_VERSION;
@@ -2800,6 +3203,7 @@ function validateBackupSave(save) {
     return "Isi file bukan data save KONGLOGAME.";
   }
 
+  let saveVersion = null;
   if (save.version !== undefined && save.version !== null) {
     if (!isNumericValue(save.version)) return "Versi save tidak valid.";
     const version = Number(save.version);
@@ -2815,6 +3219,7 @@ function validateBackupSave(save) {
         ")."
       );
     }
+    saveVersion = version;
   }
 
   if (!isNumericValue(save.money) || !isPlainObject(save.assets)) {
@@ -2827,6 +3232,8 @@ function validateBackupSave(save) {
     "stats",
     "stockCostBasis",
     "stockProfitWithdrawn",
+    "stockProfitCounted",
+    "stockProfitTotals",
   ];
   for (const field of objectFields) {
     if (
@@ -2836,6 +3243,27 @@ function validateBackupSave(save) {
     ) {
       return "Struktur data backup tidak valid (" + field + ").";
     }
+  }
+
+  if (save.profitWallet !== undefined && save.profitWallet !== null) {
+    const wallet = Number(save.profitWallet);
+    if (
+      !isNumericValue(save.profitWallet) ||
+      wallet < 0 ||
+      wallet > MAX_SAFE_MONEY
+    ) {
+      return "Struktur data backup tidak valid (profitWallet).";
+    }
+  } else if (saveVersion !== null && saveVersion >= 4) {
+    return "File backup v4/v5 tidak lengkap (profitWallet).";
+  }
+
+  if (
+    save.profitHistory !== undefined &&
+    save.profitHistory !== null &&
+    !Array.isArray(save.profitHistory)
+  ) {
+    return "Struktur data backup tidak valid (profitHistory).";
   }
 
   for (const category of Object.keys(CATEGORY_META)) {
@@ -2871,6 +3299,7 @@ function validateBackupSave(save) {
 
 function applyBackupSave(save) {
   const nextState = migrateSave(save);
+  isLocalSaveBlocked = false;
   gameState = nextState;
   saveGame();
   renderAllAssetCards();
@@ -2932,6 +3361,13 @@ function downloadBackupFile(json) {
 }
 
 async function backupGame() {
+  if (isLocalSaveBlocked) {
+    showToast(
+      "Save lokal tidak valid. Backup tidak dibuat; pulihkan atau reset.",
+      "error",
+    );
+    return;
+  }
   saveGame();
   const json = createBackupJson();
 
@@ -3239,6 +3675,12 @@ function handleAction(action, button) {
     case "transfer-savings":
       transferSavingsToRupiah();
       break;
+    case "withdraw-profit":
+      withdrawProfitWallet();
+      break;
+    case "withdraw-profit-all":
+      withdrawAllProfitWallet();
+      break;
     default:
       break;
   }
@@ -3382,6 +3824,12 @@ function init() {
   updateDashboardUI();
   updateCategoryCounts();
   setupEventListeners();
+  if (isLocalSaveBlocked) {
+    showToast(
+      "Save lokal tidak valid. Data lama tidak ditimpa; pulihkan backup atau reset.",
+      "error",
+    );
+  }
   checkFloatingWalletVisibility();
   startGameLoop();
 }
@@ -3407,6 +3855,7 @@ function createTestApi() {
       } finally {
         isResetting = false;
       }
+      isLocalSaveBlocked = false;
       gameState = createDefaultState();
       renderAllAssetCards();
       updateStockUI();
@@ -3442,6 +3891,7 @@ function createTestApi() {
         -ECONOMY_CONFIG.stocks.historyLength,
       );
       updateStockUI();
+      updateDashboardUI();
     },
     setTimer(key, value) {
       if (Object.prototype.hasOwnProperty.call(gameState.timers, key)) {
