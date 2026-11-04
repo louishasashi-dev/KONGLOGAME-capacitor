@@ -1703,6 +1703,75 @@ async function main() {
       assertEqual(state.money, 2000, "remaining sale proceeds credited");
     });
 
+    await test("Migrasi v4 partial marker mempertahankan marker dan baseline indeks hilang", async () => {
+      const rawSave = {
+        version: 4,
+        money: 0,
+        assets: { stocks: { 0: 10, 1: 10 } },
+        stockMarket: { prices: [200, 300], history: [[200], [300]] },
+        stockCostBasis: { 0: 1000, 1: 1000 },
+        stockProfitWithdrawn: { 0: 500 },
+        profitWallet: 500,
+        stats: { totalCapitalGains: 500 },
+      };
+      const migrated = await evaluate(
+        "window.KONGLOGAME.__test.migrateSave(" +
+          JSON.stringify(rawSave) +
+          ")",
+      );
+      assertEqual(migrated.version, 5, "v4 migrated to v5");
+      assertEqual(
+        migrated.stockProfitWithdrawn["0"],
+        500,
+        "existing partial marker preserved",
+      );
+      assertEqual(
+        migrated.stockProfitWithdrawn["1"],
+        2000,
+        "missing marker baselined at unrealized",
+      );
+      assertEqual(migrated.assets.stocks["0"], 10, "index 0 shares unchanged");
+      assertEqual(migrated.assets.stocks["1"], 10, "index 1 shares unchanged");
+    });
+
+    await test("Migrasi v5 sparse marker tidak melakukan baseline indeks hilang", async () => {
+      const rawSave = {
+        version: 5,
+        money: 0,
+        assets: { stocks: { 0: 10, 1: 10 } },
+        stockMarket: { prices: [200, 300], history: [[200], [300]] },
+        stockCostBasis: { 0: 1000, 1: 1000 },
+        stockProfitWithdrawn: { 0: 500 },
+        profitWallet: 500,
+        stats: {},
+      };
+      const migrated = await evaluate(
+        "window.KONGLOGAME.__test.migrateSave(" +
+          JSON.stringify(rawSave) +
+          ")",
+      );
+      assertEqual(migrated.version, 5, "stays v5");
+      assertEqual(
+        migrated.stockProfitWithdrawn["0"],
+        500,
+        "existing sparse marker preserved",
+      );
+      assertEqual(
+        migrated.stockProfitWithdrawn["1"],
+        undefined,
+        "missing key stays absent",
+      );
+      assert(
+        !Object.prototype.hasOwnProperty.call(
+          migrated.stockProfitWithdrawn,
+          "1",
+        ),
+        "missing key not materialized",
+      );
+      assertEqual(migrated.assets.stocks["0"], 10, "index 0 shares unchanged");
+      assertEqual(migrated.assets.stocks["1"], 10, "index 1 shares unchanged");
+    });
+
     await test("Migrasi v4 posisi sudah terjual mempertahankan wallet dan snapshot", async () => {
       await seedSave({
         version: 4,
